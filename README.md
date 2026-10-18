@@ -116,8 +116,18 @@ pip install -e .
 ```
 
 An editable install puts `simReco_muraves` on the import path and
-registers the three command-line entry points. Without it, the modules
-must be run from the repository root with `PYTHONPATH=.` set.
+registers the command-line entry points. Without it, the modules must
+be run from the repository root with `PYTHONPATH=.` set.
+
+To run the test suite as well, install the development extra:
+
+```bash
+pip install -e ".[dev]"
+python -m pytest simReco_muraves/golden_tracking/tests -q
+```
+
+`pytest` is not a runtime dependency, so a plain install will not
+provide it.
 
 ## Production Entry Points
 
@@ -160,10 +170,26 @@ The golden stage accepts either input type and detects which it has
 been given. `--input-type {clustered,tracked}` asserts the expected
 type and errors on a mismatch, rather than overriding detection.
 
-Note that golden output derived from a clustered file and from the
-corresponding tracked file resolve to the same default filename, so
-produce them in separate directories or pass `-o` when comparing the
-two routes.
+Golden output derived from a clustered file and from the
+corresponding tracked file resolve to the same default filename. That
+is deliberate: the two routes are expected to produce identical
+output, so the result does not depend on which one was taken, and the
+route that was actually used is recorded in the file's provenance
+rather than in its name.
+
+The consequence is that producing both at once, in order to compare
+them, needs `-o` or separate directories. An existing output is never
+overwritten without `--force`.
+
+```bash
+muraves-simGTrk validation_data/raw_100_clustered_part000.root \
+    -o validation_data/g_clustered.root
+muraves-simGTrk validation_data/raw_100_tracked_part000.root \
+    -o validation_data/g_tracked.root
+```
+
+`muraves-simCompare` does this for you, writing its intermediates to a
+temporary directory.
 
 ### Digitization parameters
 
