@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.my_venv/
+*.bak_*
+extras/
+logs_Trk/
+.DS_Store
+
+# Derived ROOT output. The raw inputs below are tracked.
+validation_data/*.root
+!validation_data/raw_100.root
+!validation_data/raw_1000.root
+dist/
+build/
+currentStatus_*.txt
+docs/

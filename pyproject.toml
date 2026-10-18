@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simreco-muraves"
+version = "0.1.0"
+description = "Simulation-to-reconstruction bridge for the MURAVES detector"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "uproot",
+    "awkward",
+    "numpy",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+# Both spellings are registered: console-script names are
+# case-sensitive on Linux but not on macOS, so a collaborator typing
+# the lower-case form on the cluster would otherwise get
+# "command not found" after it worked locally.
+"muraves-simCluster" = "simReco_muraves.cli.run_clusterization:main"
+"muraves-simTrk" = "simReco_muraves.cli.run_tracking:main"
+"muraves-simGTrk" = "simReco_muraves.cli.run_gTrks:main"
+"muraves-sim" = "simReco_muraves.cli.overview:main"
+"muraves-simCompare" = "simReco_muraves.cli.compare_golden_routes:main"
+
+[tool.setuptools.packages.find]
+include = ["simReco_muraves*"]
+
+[tool.pytest.ini_options]
+testpaths = ["simReco_muraves"]
