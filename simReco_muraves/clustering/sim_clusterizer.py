@@ -5,7 +5,14 @@ import numpy as np
 from simReco_muraves.models.cluster_record import ClusterRecord
 
 # Adjust this import to wherever CreateClusterList actually lives
-from simReco_muraves.clustering.ClusterLists import CreateClusterList
+from simReco_muraves.clustering.ClusterLists import (
+    CreateClusterList,
+    DeterministicSmearingRNG,
+)
+from simReco_muraves.clustering.seeding import (
+    digitizer_generator,
+    smearing_seed,
+)
 
 from dataclasses import dataclass, field
 
@@ -74,11 +81,16 @@ class SimClusterizer:
         cluster_threshold: float = 6.0,
         single_strip_threshold: float = 10.0,
         adjacent_threshold: float = 2.0,
+        rng_seed: int | None = None,
     ):
 
         self.cluster_threshold = cluster_threshold
         self.single_strip_threshold = single_strip_threshold
         self.adjacent_threshold = adjacent_threshold
+
+        # None keeps the experiment's default: unseeded smearing from
+        # the operating system, different on every run.
+        self.rng_seed = rng_seed
 
     def cluster_plane(
         self,
@@ -102,7 +114,28 @@ class SimClusterizer:
 
             TriggerMask1=list(range(32)),
             TriggerMask2=list(range(32)),
+
+            smearing_rng=self._smearing_rng(plane),
         )
+
+    def _smearing_rng(self, plane: Plane64):
+        """Per-plane generator for single-strip smearing.
+
+        Returns None without a seed, which leaves CreateClusterList on
+        its unseedable system default.
+        """
+        if self.rng_seed is None:
+            return None
+
+        return DeterministicSmearingRNG(
+            smearing_seed(
+                self.rng_seed,
+                plane.process_id,
+                plane.event,
+                plane.station,
+            )
+        )
+
 def build_planes(digitized_hits):
     """
     Build one Plane64 object per (event, station).
@@ -258,9 +291,10 @@ class PoissonDigitizer:
     ):
 
         self.pe_per_mev = pe_per_mev
+        self.rng_seed = rng_seed
         self.rng = np.random.default_rng(rng_seed)
 
-    def digitize_bar(self, bar_hit):
+    def digitize_bar(self, bar_hit, rng=None):
 
         expected_npe = (
             self.pe_per_mev
@@ -268,7 +302,7 @@ class PoissonDigitizer:
         )
 
         observed_npe = float(
-            self.rng.poisson(expected_npe)
+            (self.rng if rng is None else rng).poisson(expected_npe)
         )
 
         return DigitizedBarHit(
@@ -278,6 +312,43 @@ class PoissonDigitizer:
         )
 
     def digitize(self, bar_hits):
+        """Digitize bar hits, returning them in the order given.
+
+        With a seed, each (ProcessID, Event, Station) draws from its
+        own generator, and within a plane bars are drawn in strip
+        order. A bar's result therefore depends neither on processing
+        order nor on the order in which Geant4 wrote its hits. See
+        simReco_muraves.clustering.seeding.
+
+        Without a seed, all bars share one unseeded stream.
+        """
+        if self.rng_seed is None:
+            return self._digitize_single_stream(bar_hits)
+
+        bar_hits = list(bar_hits)
+        indices_by_plane = defaultdict(list)
+
+        for index, hit in enumerate(bar_hits):
+            indices_by_plane[
+                (hit.process_id, hit.event, hit.station)
+            ].append(index)
+
+        digitized = [None] * len(bar_hits)
+
+        for (process_id, event, station), indices in indices_by_plane.items():
+            rng = digitizer_generator(
+                self.rng_seed,
+                process_id,
+                event,
+                station,
+            )
+
+            for index in sorted(indices, key=lambda i: bar_hits[i].strip):
+                digitized[index] = self.digitize_bar(bar_hits[index], rng)
+
+        return digitized
+
+    def _digitize_single_stream(self, bar_hits):
 
         return [
             self.digitize_bar(hit)

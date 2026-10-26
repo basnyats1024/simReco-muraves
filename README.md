@@ -200,8 +200,22 @@ set the simulated energy scale:
 muraves-simCluster <hit_root_file> --pe-per-mev 8.5 --rng-seed 42
 ```
 
-The defaults reproduce the configuration used for the Phase I-III
+The default conversion factor is the one used for the Phase I-III
 validation samples.
+
+`--rng-seed` is a master seed. It drives both random processes in
+clusterization, Poisson digitization and the experiment's random
+smearing of single-strip cluster positions, through seeds derived per
+plane and per event (`simReco_muraves/clustering/seeding.py`). The
+same input, seed and code therefore give identical output; the result
+does not depend on processing order or chunk boundaries; and changing
+one plane's inputs changes only that plane's random numbers. The
+scheme in use is recorded in each file's provenance.
+
+Output produced before this scheme was introduced is not reproducible.
+Single-strip smearing then drew from an unseeded system source, so
+re-running gave a slightly different golden selection each time, with
+about 0.6% of golden events changing between runs.
 
 ---
 

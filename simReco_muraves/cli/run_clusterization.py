@@ -23,6 +23,7 @@ from simReco_muraves.io.provenance_tree import (
 )
 from simReco_muraves.io.root_reader import RootReader
 from simReco_muraves.io.root_writer import RootWriter
+from simReco_muraves.clustering.seeding import SEEDING_SCHEME
 
 
 # Detector-response defaults. These reproduce the configuration used for
@@ -85,7 +86,7 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=DEFAULT_RNG_SEED,
         help=(
-            "Seed for the Poisson digitizer "
+            "Master seed for digitization and single-strip smearing "
             f"(default: {DEFAULT_RNG_SEED})."
         ),
     )
@@ -123,6 +124,7 @@ def print_configuration(arguments: argparse.Namespace) -> None:
     print(f"Output prefix  = {arguments.output_prefix}")
     print(f"PE per MeV     = {arguments.pe_per_mev}")
     print(f"RNG seed       = {arguments.rng_seed}")
+    print(f"Seeding        = {SEEDING_SCHEME}")
     print(f"Chunk size     = {arguments.chunk_size:,}")
     print("==================================================")
     print()
@@ -142,7 +144,7 @@ def run_clusterization(arguments: argparse.Namespace) -> None:
         rng_seed=arguments.rng_seed,
     )
 
-    clusterizer = SimClusterizer()
+    clusterizer = SimClusterizer(rng_seed=arguments.rng_seed)
 
     event_keys = reader.get_event_keys()
 
@@ -225,6 +227,7 @@ def run_clusterization(arguments: argparse.Namespace) -> None:
             parameters={
                 "pe_per_mev": arguments.pe_per_mev,
                 "rng_seed": arguments.rng_seed,
+                "seeding_scheme": SEEDING_SCHEME,
                 "chunk_size": arguments.chunk_size,
                 "output_prefix": arguments.output_prefix,
                 "events_processed": len(event_keys),
@@ -239,6 +242,9 @@ def run_clusterization(arguments: argparse.Namespace) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     arguments = parse_arguments(argv)
+
+    if arguments.rng_seed < 0:
+        raise SystemExit("--rng-seed must be non-negative")
 
     input_file = arguments.input_file.expanduser().resolve()
 
