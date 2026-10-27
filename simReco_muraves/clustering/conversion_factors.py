@@ -78,6 +78,9 @@ def resolve_conversion_factors(
     Return a mapping from **station ID** to a conversion factor in
     **nPE per MeV**. Station IDs are the integers the digitizer sees on
     every BarHit (0, 1, 2, 3, 8, 9, 10, 11 in the current geometry).
+    The station-to-plane mapping is STATION_MAP in
+    simReco_muraves/tracking/event_builder_adapter.py: stations 0-3 are
+    Y1-Y4 and 8-11 are Z1-Z4. Use it rather than keeping a second copy.
 
     - The file format is yours to design. If it is keyed by plane name
       (Z1 ... Y4) or anything else, translating to station IDs happens

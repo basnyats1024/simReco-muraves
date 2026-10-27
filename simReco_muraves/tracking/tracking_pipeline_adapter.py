@@ -28,7 +28,9 @@ def run_tracking_pipeline(
 ) -> list[TrackingResult]:
     """
     Run MURAVES tracking reconstruction on a flat list of ClusterRecord
-    objectsngResult per (ProcessID, Event).
+    objects, returning one TrackingResult per (ProcessID, Event) in the
+    order build_tracking_events produces the events. The entry points
+    rely on that order when they pair events with results.
     """
 
     tracking_events = build_tracking_events(clusters)

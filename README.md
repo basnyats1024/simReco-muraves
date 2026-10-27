@@ -248,9 +248,25 @@ Canonical regression suite:
 python -m pytest simReco_muraves -q
 ```
 
-The suite covers the golden-track layer, which both the clustered and
-the tracked route share, and in the clustering stage the seeding and
-the conversion-factor options. Tracking and I/O are not covered yet.
+The suite covers every stage:
+
+| Area | What is tested |
+|---|---|
+| clustering | bar aggregation, plane building, digitization including seeding and per-station factors, the clusterizer's inputs, cluster records |
+| tracking | the straight-line fit, candidate building in `MakeTracks`, the angle convention, event building, four-plane candidate selection, and whole synthetic tracks end to end |
+| golden tracks | the projection shared by both routes |
+| provenance | records, chaining, and storage in ROOT files |
+
+The end-to-end tracking tests double as a regression test for the
+Phase II geometry bug: a straight track with known slopes must come
+back with the angles those slopes imply, and running it on plane
+indices instead of plane positions is shown to be caught.
+
+Tests on the experiment's own code (`Tracking.py`,
+`Evaluate_Angular_Coordinates.py`) are characterisation tests. They pin
+current behaviour, including the quirks listed under *Observations on
+the reused code*, so that changing any of it is a deliberate act. A
+test pinning a quirk does not mean the quirk is correct.
 
 ### Comparing the two golden routes
 
