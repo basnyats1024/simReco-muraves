@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 import numpy as np
 from simReco_muraves.models.cluster_record import ClusterRecord
 
@@ -281,6 +282,10 @@ class PoissonDigitizer:
 
     expected_nPE = pe_per_mev * E(MeV)
 
+    pe_per_mev is either one factor for every plane, or a mapping from
+    station ID to factor. A station missing from the mapping is an
+    error, never a silent default.
+
     observed_nPE ~ Poisson(expected_nPE)
     """
 
@@ -294,10 +299,24 @@ class PoissonDigitizer:
         self.rng_seed = rng_seed
         self.rng = np.random.default_rng(rng_seed)
 
+    def factor_for(self, station):
+        """Conversion factor, in nPE per MeV, for one station."""
+        if not isinstance(self.pe_per_mev, Mapping):
+            return self.pe_per_mev
+
+        try:
+            return self.pe_per_mev[station]
+        except KeyError:
+            raise ValueError(
+                f"no conversion factor for station {station}; the "
+                "factors provided cover stations "
+                f"{sorted(self.pe_per_mev)}"
+            ) from None
+
     def digitize_bar(self, bar_hit, rng=None):
 
         expected_npe = (
-            self.pe_per_mev
+            self.factor_for(bar_hit.station)
             * bar_hit.energy_mev
         )
 

@@ -24,6 +24,11 @@ from simReco_muraves.io.provenance_tree import (
 from simReco_muraves.io.root_reader import RootReader
 from simReco_muraves.io.root_writer import RootWriter
 from simReco_muraves.clustering.seeding import SEEDING_SCHEME
+from simReco_muraves.clustering.conversion_factors import (
+    DETECTORS,
+    digitization_setup,
+    parse_run_range,
+)
 
 
 # Detector-response defaults. These reproduce the configuration used for
@@ -33,6 +38,13 @@ DEFAULT_PE_PER_MEV = 8.5
 DEFAULT_RNG_SEED = 42
 DEFAULT_CHUNK_SIZE = 100_000
 DEFAULT_PROGRESS_EVERY = 25_000
+
+
+def _run_range_argument(text: str):
+    try:
+        return parse_run_range(text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
 
 
 def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
@@ -67,17 +79,48 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "Chunk filename prefix "
-            "(default: <input stem>_clustered)."
+            "(default: <input stem>_clustered, with the detector and "
+            "run range inserted when --pe-per-mev-file is used)."
         ),
     )
 
     parser.add_argument(
         "--pe-per-mev",
         type=float,
-        default=DEFAULT_PE_PER_MEV,
+        default=None,
         help=(
-            "Photoelectron yield per MeV used by the digitizer "
-            f"(default: {DEFAULT_PE_PER_MEV})."
+            "One photoelectron yield per MeV for every plane "
+            f"(default: {DEFAULT_PE_PER_MEV}). Ignored, with a warning, "
+            "when --pe-per-mev-file is given."
+        ),
+    )
+
+    parser.add_argument(
+        "--pe-per-mev-file",
+        type=Path,
+        default=None,
+        help=(
+            "Read per-plane yields from a file. Requires --detector "
+            "and --run-range, and takes precedence over --pe-per-mev."
+        ),
+    )
+
+    parser.add_argument(
+        "--detector",
+        type=str.upper,
+        choices=DETECTORS,
+        default=None,
+        help="Detector whose calibration to use. Only with --pe-per-mev-file.",
+    )
+
+    parser.add_argument(
+        "--run-range",
+        type=_run_range_argument,
+        default=None,
+        metavar="START-END",
+        help=(
+            "Run range whose calibration to use, e.g. 10061-11918 or a "
+            "single run. Only with --pe-per-mev-file."
         ),
     )
 
@@ -122,7 +165,17 @@ def print_configuration(arguments: argparse.Namespace) -> None:
     print(f"Input          = {arguments.input_file}")
     print(f"Output dir     = {arguments.output_dir}")
     print(f"Output prefix  = {arguments.output_prefix}")
-    print(f"PE per MeV     = {arguments.pe_per_mev}")
+    setup = arguments.digitization
+
+    if setup.per_station:
+        print(f"PE per MeV     = per station, from {setup.provenance['pe_per_mev_file']}")
+        print(f"Detector       = {setup.provenance['detector']}")
+        print(f"Run range      = {setup.provenance['run_range']}")
+
+        for station, factor in sorted(setup.factors.items()):
+            print(f"  station {station:>3}  = {factor}")
+    else:
+        print(f"PE per MeV     = {setup.factors}")
     print(f"RNG seed       = {arguments.rng_seed}")
     print(f"Seeding        = {SEEDING_SCHEME}")
     print(f"Chunk size     = {arguments.chunk_size:,}")
@@ -140,7 +193,7 @@ def run_clusterization(arguments: argparse.Namespace) -> None:
     )
 
     digitizer = PoissonDigitizer(
-        pe_per_mev=arguments.pe_per_mev,
+        pe_per_mev=arguments.digitization.factors,
         rng_seed=arguments.rng_seed,
     )
 
@@ -225,7 +278,7 @@ def run_clusterization(arguments: argparse.Namespace) -> None:
             stage="clusterization",
             input_path=arguments.input_file,
             parameters={
-                "pe_per_mev": arguments.pe_per_mev,
+                **arguments.digitization.provenance,
                 "rng_seed": arguments.rng_seed,
                 "seeding_scheme": SEEDING_SCHEME,
                 "chunk_size": arguments.chunk_size,
@@ -246,6 +299,22 @@ def main(argv: list[str] | None = None) -> None:
     if arguments.rng_seed < 0:
         raise SystemExit("--rng-seed must be non-negative")
 
+    # Resolved before the input is opened, so a configuration mistake
+    # stops the run in seconds rather than after hours of processing.
+    try:
+        arguments.digitization = digitization_setup(
+            pe_per_mev=arguments.pe_per_mev,
+            pe_per_mev_file=arguments.pe_per_mev_file,
+            detector=arguments.detector,
+            run_range=arguments.run_range,
+            default_pe_per_mev=DEFAULT_PE_PER_MEV,
+        )
+    except (ValueError, NotImplementedError) as error:
+        raise SystemExit(f"error: {error}") from None
+
+    for warning in arguments.digitization.warnings:
+        print(f"WARNING: {warning}")
+
     input_file = arguments.input_file.expanduser().resolve()
 
     if not input_file.is_file():
@@ -261,7 +330,9 @@ def main(argv: list[str] | None = None) -> None:
         )
 
     if arguments.output_prefix is None:
-        arguments.output_prefix = f"{input_file.stem}_clustered"
+        arguments.output_prefix = (
+            f"{input_file.stem}{arguments.digitization.tag}_clustered"
+        )
 
     print_configuration(arguments)
     run_clusterization(arguments)
