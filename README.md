@@ -433,16 +433,25 @@ theta.
 ### Geometry
 
 The geometry constants in the tracking and golden entry points are the
-**ROSSO** working point from `reco_parameters.json`:
+ones the Geant4 simulation was generated with (g4-sim commit
+`bac9b35`), in metres:
 
 ```text
-x_pos = [-0.265, 0.0, 0.262, 1.475]
-z_add = [ 0.292, 0.251, 0.207, 0.0  ]
+x_pos = [-0.26,  0.0,   0.262, 1.492]
+z_add = [ 0.289, 0.249, 0.207, 0.0  ]
 ```
 
-NERO and BLU differ, most visibly in the lever arm to plane 4 (1.492 m
-against 1.475 m) and, for BLU, throughout `z_add`. Comparisons of
-simulation against those two detectors carry that difference.
+Reconstruction must use the geometry the hits were generated with, not
+that of the detector being compared against. Until October 2026 the
+entry points used the ROSSO working point instead (`x_pos` ending in
+1.475, `z_add` starting 0.292, 0.251), which differs from the generated
+geometry by up to 1.7 cm in X and 0.3 cm in Z. Outputs from that period
+are identifiable by the `x_pos` and `z_add` in their provenance.
+
+The simulated X positions coincide with NERO's and BLU's; the Z heights
+match no detector exactly. Comparisons against NERO, ROSSO and BLU
+therefore carry each detector's geometric differences from the
+simulation.
 
 The proximity cuts are not independent constants: they are
 `proximity_sigma_multiplier` (5.0) times the corresponding sigma, so
