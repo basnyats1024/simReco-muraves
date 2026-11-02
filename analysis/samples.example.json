@@ -1,0 +1,26 @@
+{
+  "_readme": "Copy to samples.json (gitignored) and edit the paths. A file entry may be a ROOT file, a directory of ROOT files, a glob pattern, or a list of these. Simulation samples need 'clustered' (phase I) and 'tracked' (phase II); data samples need 'analyzed'. Optional per sample: 'label', 'colour', 'marker', and for data 'detector' when the name is not NERO, ROSSO or BLU. Add further simulation samples, e.g. an older production, to compare simulation versions with --target.",
+  "samples": {
+    "SIM": {
+      "kind": "sim",
+      "label": "SIM fullRun_v3",
+      "clustered": "/path/to/simReco_output/fullRun_v3/clustered",
+      "tracked": "/path/to/simReco_output/fullRun_v3/tracked"
+    },
+    "NERO": {
+      "kind": "data",
+      "label": "NERO 6780-6835",
+      "analyzed": "/path/to/expData/MURAVES_AnalyzedData_NERO_run6780-6835_v1.root"
+    },
+    "ROSSO": {
+      "kind": "data",
+      "label": "ROSSO 3780-3818",
+      "analyzed": "/path/to/expData/MURAVES_AnalyzedData_ROSSO_run3780-3818_v1.root"
+    },
+    "BLU": {
+      "kind": "data",
+      "label": "BLU 8822-8865",
+      "analyzed": "/path/to/expData/MURAVES_AnalyzedData_BLU_run8822-8865_v1.root"
+    }
+  }
+}

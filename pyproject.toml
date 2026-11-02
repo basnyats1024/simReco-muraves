@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+analysis = ["matplotlib"]
 
 [project.scripts]
 # Both spellings are registered: console-script names are

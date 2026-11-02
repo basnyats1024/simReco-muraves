@@ -16,3 +16,7 @@ build/
 currentStatus_*.txt
 docs/
 .venv/
+
+# analysis: local sample paths and outputs
+analysis/samples.json
+analysis_output/
