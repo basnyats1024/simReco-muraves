@@ -26,6 +26,7 @@ class BarHit:
     bar: int
     strip: int
     energy_mev: float
+    path_length_cm: float
     t_min_ns: float
     t_max_ns: float
     multiplicity: int
@@ -215,6 +216,9 @@ def aggregate_bar_hits(raw_hits):
     Energy:
         E_bar = sum(Edep)
 
+    Pathlength:
+        L_bar = sum(pathlength) in cm
+    
     Timing:
         t_min = min(hit times)
         t_max = max(hit times)
@@ -252,6 +256,10 @@ def aggregate_bar_hits(raw_hits):
             h.edep_mev for h in hits
         )
 
+        path_length_cm = sum(
+            h.path_length_cm for h in hits
+        )
+
         t_min_ns = min(
             h.time_ns for h in hits
         )
@@ -269,6 +277,7 @@ def aggregate_bar_hits(raw_hits):
                 bar=bar,
                 strip=strip,
                 energy_mev=energy_mev,
+                path_length_cm=path_length_cm,
                 t_min_ns=t_min_ns,
                 t_max_ns=t_max_ns,
                 multiplicity=len(hits),

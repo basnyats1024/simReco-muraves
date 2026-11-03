@@ -251,6 +251,7 @@ def hit(station, strip=5, energy_mev=2.0):
         bar=strip % 32,
         strip=strip,
         energy_mev=energy_mev,
+        path_length_cm=1.7,
         t_min_ns=1.0,
         t_max_ns=1.0,
         multiplicity=1,

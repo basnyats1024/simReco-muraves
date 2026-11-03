@@ -37,6 +37,7 @@ class RootReader:
                     "ScintHitTrackID",
                     "ScintHitParentID",
                     "ScintHitPDG",
+                    "ScintHitPathLength",
                 ],
                 library="np",
             )
@@ -92,6 +93,9 @@ class RootReader:
                     pdg=int(
                         arrays["ScintHitPDG"][idx]
                     ),
+                    path_length_cm=float(
+                        arrays["ScintHitPathLength"][idx]
+                        )/10.0,  # mm to cm
                 )
             )
 

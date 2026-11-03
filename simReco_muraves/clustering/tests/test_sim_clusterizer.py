@@ -18,7 +18,7 @@ from simReco_muraves.clustering import sim_clusterizer as sc
 from simReco_muraves.clustering.ClusterLists import ClusterCollection
 
 
-def raw_hit(process_id=1, event=10, station=0, module=0, bar=5, edep=1.0, time=2.0):
+def raw_hit(process_id=1, event=10, station=0, module=0, bar=5, edep=1.0, path_length=1.7, time=2.0):
     return SimpleNamespace(
         process_id=process_id,
         event=event,
@@ -26,6 +26,7 @@ def raw_hit(process_id=1, event=10, station=0, module=0, bar=5, edep=1.0, time=2
         module=module,
         bar=bar,
         edep_mev=edep,
+        path_length_cm=path_length,
         time_ns=time,
     )
 
@@ -39,6 +40,7 @@ def digitized(station, strip, npe, process_id=1, event=10, time=2.0):
         bar=strip % 32,
         strip=strip,
         energy_mev=npe / 8.5,
+        path_length_cm=1.7,
         t_min_ns=time,
         t_max_ns=time,
         multiplicity=1,
@@ -69,11 +71,12 @@ def test_unknown_module_is_rejected():
 
 def test_hits_in_one_bar_are_merged():
     bars = sc.aggregate_bar_hits(
-        [raw_hit(edep=1.0, time=3.0), raw_hit(edep=2.5, time=1.5)]
+        [raw_hit(edep=1.0, path_length=0.8, time=3.0), raw_hit(edep=2.5,path_length=1.2, time=1.5)]
     )
 
     assert len(bars) == 1
     assert bars[0].energy_mev == pytest.approx(3.5)
+    assert bars[0].path_length_cm == pytest.approx(2.0)
     assert bars[0].t_min_ns == 1.5
     assert bars[0].t_max_ns == 3.0
     assert bars[0].dt_ns == pytest.approx(1.5)

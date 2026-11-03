@@ -17,3 +17,5 @@ class RawHit:
     track_id: int
     parent_id: int
     pdg: int
+
+    path_length_cm: float
