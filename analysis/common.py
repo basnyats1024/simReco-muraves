@@ -1,8 +1,8 @@
 """Shared pieces for the quick-check comparison scripts.
 
-phase1_clusters.py and phase2_tracks.py compare simulation against data,
-or one simulation version against another, at cluster level and at
-track level. This module holds what they share:
+phase1_clusters.py, phase2_tracks.py and phase3_golden.py compare
+simulation against data, or one simulation version against another, at
+cluster, track and golden-track level. This module holds what they share:
 
     samples   reading samples.json and resolving file paths
     readers   one reader per output format, each returning the same numpy
@@ -13,8 +13,9 @@ track level. This module holds what they share:
     output    the summary table and a record of what was read
 
 The readers double as examples of how to read each format: simulated
-ClusteredData and TrackedData, written as RNTuples, and experimental
-AnalyzedData, written as a TTree. uproot reads both kinds identically.
+ClusteredData, TrackedData and Tracks4ptree, written as RNTuples, and
+experimental AnalyzedData and golden Tracks4ptree, written as TTrees.
+uproot reads both kinds identically.
 
 These are quick checks, not a physics analysis. No event selection is
 applied, and the number of events behind every quantity is printed, so
@@ -64,6 +65,21 @@ def view_of(plane: str) -> str:
     return "XZ" if plane.startswith("Z") else "XY"
 
 
+DIRECTIONS = ("all", "forward", "backward")
+
+
+def is_forward(phi: np.ndarray) -> np.ndarray:
+    """Inside the field of view, 90 < phi < 270 degrees."""
+    return (phi > 90) & (phi < 270)
+
+
+def direction_mask(phi: np.ndarray, direction: str) -> np.ndarray:
+    if direction == "all":
+        return np.ones(len(phi), dtype=bool)
+    forward = is_forward(phi)
+    return forward if direction == "forward" else ~forward
+
+
 # ==========================================================
 # Samples
 # ==========================================================
@@ -85,8 +101,10 @@ SIM_STYLES = [
 FILE_KEYS = {
     ("sim", 1): "clustered",
     ("sim", 2): "tracked",
+    ("sim", 3): "golden",
     ("data", 1): "analyzed",
     ("data", 2): "analyzed",
+    ("data", 3): "golden",
 }
 
 
@@ -98,15 +116,33 @@ class Sample:
     colour: str
     marker: str
     paths: dict = field(default_factory=dict)
+    reco_version: str | None = None
+
+    @property
+    def display(self) -> str:
+        """The label, with the reconstruction version when one is set."""
+        return f"{self.label} [{self.reco_version}]" if self.reco_version else self.label
+
+
+def version_note(samples) -> str:
+    """A short note of the data reconstruction versions, for titles."""
+    versions = {s.name: s.reco_version for s in samples.values() if s.kind == "data" and s.reco_version}
+    if not versions:
+        return ""
+    distinct = sorted(set(versions.values()))
+    if len(distinct) == 1:
+        return f"data reconstruction {distinct[0]}"
+    return "data reconstruction " + ", ".join(f"{n} {v}" for n, v in versions.items())
 
 
 def load_samples(config_path: Path, names: list[str] | None = None) -> dict[str, Sample]:
     """Samples from samples.json, in the order requested (default: file order).
 
-    Each entry has a kind ("sim" or "data"), an optional label, colour and
-    marker, and its files: "clustered" and "tracked" for simulation,
-    "analyzed" for data. A file entry may be a ROOT file, a directory of
-    ROOT files, a glob pattern, or a list of these.
+    Each entry has a kind ("sim" or "data"), an optional label, colour,
+    marker and reco_version, and its files: "clustered", "tracked" and
+    "golden" for simulation, "analyzed" and "golden" for data. A file
+    entry may be a ROOT file, a directory of ROOT files, a glob pattern,
+    or a list of these.
     """
     config_path = Path(config_path)
 
@@ -149,7 +185,8 @@ def load_samples(config_path: Path, names: list[str] | None = None) -> dict[str,
             label=entry.get("label", name),
             colour=entry.get("colour", colour),
             marker=entry.get("marker", marker),
-            paths={key: value for key, value in entry.items() if key in ("clustered", "tracked", "analyzed")},
+            paths={key: value for key, value in entry.items() if key in ("clustered", "tracked", "analyzed", "golden")},
+            reco_version=entry.get("reco_version"),
         )
 
     return samples
@@ -457,7 +494,7 @@ def _event_keys(process_id: np.ndarray, event: np.ndarray) -> np.ndarray:
 
 @dataclass
 class TrackSample:
-    events: int
+    events: int                        # all events read, whatever the direction
     ntracks: dict[str, np.ndarray]     # 3p tracks per event, per view
     chi2_3p: dict[str, np.ndarray]     # best 3p track, events that have one
     chi2_4p: dict[str, np.ndarray]     # selected 4p track
@@ -469,7 +506,7 @@ class TrackSample:
     valid_4p: int
 
 
-def read_tracks(sample: Sample, files: list[Path], max_events: int | None) -> TrackSample:
+def read_tracks(sample: Sample, files: list[Path], max_events: int | None, direction: str = "all") -> TrackSample:
     reader = _sim_track_file if sample.kind == "sim" else _data_track_file
     tree_name = "TrackedData" if sample.kind == "sim" else "AnalyzedData"
     per_file = []
@@ -487,7 +524,7 @@ def read_tracks(sample: Sample, files: list[Path], max_events: int | None) -> Tr
         n_events += stop
 
     raw = {key: np.concatenate([part[key] for part in per_file]) for key in per_file[0]}
-    return _derive_tracks(raw, n_events)
+    return _derive_tracks(raw, n_events, direction)
 
 
 def _sim_track_file(tree, stop: int) -> dict[str, np.ndarray]:
@@ -536,9 +573,22 @@ def _common_track_branches(tree, stop: int) -> dict[str, np.ndarray]:
     return raw
 
 
-def _derive_tracks(raw: dict[str, np.ndarray], n_events: int) -> TrackSample:
+def _derive_tracks(raw: dict[str, np.ndarray], n_events: int, direction: str = "all") -> TrackSample:
+    """Per-track quantities, for one direction or all.
+
+    With a direction, 3p quantities keep events whose 3p track points that
+    way (phi_3p), 4p quantities those whose 4p track does (phi_4p). Track
+    multiplicities stay per event, over all events.
+    """
     valid_3p = raw["theta_3p"] >= 0
     valid_4p = raw["theta_4p"] >= 0
+
+    if direction == "all":
+        keep_3p = np.ones(n_events, dtype=bool)
+        keep_4p = np.ones(n_events, dtype=bool)
+    else:
+        keep_3p = valid_3p & direction_mask(raw["phi_3p"], direction)
+        keep_4p = valid_4p & direction_mask(raw["phi_4p"], direction)
 
     def finite(values, mask):
         values = values[mask]
@@ -548,24 +598,119 @@ def _derive_tracks(raw: dict[str, np.ndarray], n_events: int) -> TrackSample:
         events=n_events,
         ntracks={}, chi2_3p={}, chi2_4p={}, theta={}, phi={},
         residual={}, scattering={},
-        valid_3p=int(valid_3p.sum()), valid_4p=int(valid_4p.sum()),
+        valid_3p=int((valid_3p & keep_3p).sum()), valid_4p=int((valid_4p & keep_4p).sum()),
     )
 
     for view in ("xz", "xy"):
         name = view.upper()
         sample.ntracks[name] = raw[f"ntracks_{view}"]
-        sample.chi2_3p[name] = finite(raw[f"chi_{view}"], raw[f"chi_index_{view}"] >= 0)
-        sample.chi2_4p[name] = finite(raw[f"chi4_{view}"], valid_4p)
-        sample.scattering[name] = finite(raw[f"scat_{view}"], valid_4p)
+        sample.chi2_3p[name] = finite(raw[f"chi_{view}"], (raw[f"chi_index_{view}"] >= 0) & keep_3p)
+        sample.chi2_4p[name] = finite(raw[f"chi4_{view}"], valid_4p & keep_4p)
+        sample.scattering[name] = finite(raw[f"scat_{view}"], valid_4p & keep_4p)
 
-    for kind, valid in (("3p", valid_3p), ("4p", valid_4p)):
-        sample.theta[kind] = finite(raw[f"theta_{kind}"], valid)
-        sample.phi[kind] = finite(raw[f"phi_{kind}"], valid)
+    for kind, valid, keep in (("3p", valid_3p, keep_3p), ("4p", valid_4p, keep_4p)):
+        sample.theta[kind] = finite(raw[f"theta_{kind}"], valid & keep)
+        sample.phi[kind] = finite(raw[f"phi_{kind}"], valid & keep)
 
     for plane in RESIDUAL_PLANES:
-        sample.residual[plane] = finite(raw[f"residual_{plane}"], np.ones(n_events, dtype=bool))
+        sample.residual[plane] = finite(raw[f"residual_{plane}"], keep_3p)
 
     return sample
+
+
+# ==========================================================
+# Golden-track samples (phase III)
+# ==========================================================
+
+
+@dataclass
+class GoldenSample:
+    """One entry per golden event: its selected four-plane track."""
+
+    events: int
+    theta: np.ndarray
+    phi: np.ndarray
+    scattering: dict[str, np.ndarray]     # "XZ", "XY"
+    chi2_3p: dict[str, np.ndarray]
+    chi2_4p: dict[str, np.ndarray]
+    energy: dict[str, np.ndarray]         # selected cluster, per plane
+    position: dict[str, np.ndarray]
+    size: dict[str, np.ndarray]
+    max_strip: dict[str, np.ndarray]
+    multiplicity: dict[str, np.ndarray]   # all clusters on the plane
+    nontrack_position: dict[str, Jagged]  # the other clusters on the plane
+
+    def subset(self, mask: np.ndarray) -> "GoldenSample":
+        def jagged(j):
+            return Jagged(j.counts[mask], j.values[np.repeat(mask, j.counts)])
+
+        per_view = lambda d: {k: v[mask] for k, v in d.items()}
+        return GoldenSample(
+            events=int(mask.sum()), theta=self.theta[mask], phi=self.phi[mask],
+            scattering=per_view(self.scattering), chi2_3p=per_view(self.chi2_3p), chi2_4p=per_view(self.chi2_4p),
+            energy=per_view(self.energy), position=per_view(self.position), size=per_view(self.size),
+            max_strip=per_view(self.max_strip), multiplicity=per_view(self.multiplicity),
+            nontrack_position={p: jagged(j) for p, j in self.nontrack_position.items()},
+        )
+
+
+def read_golden(files: list[Path], max_events: int | None) -> GoldenSample:
+    """Simulated or experimental Tracks4ptree.
+
+    The two differ only in spelling: experimental files use the legacy
+    ClusterMultriplicity_<plane>, simulated ones ClusterMultiplicity_<plane>.
+    """
+    parts = []
+    n_events = 0
+
+    for path in files:
+        remaining = None if max_events is None else max_events - n_events
+        if remaining is not None and remaining <= 0:
+            break
+
+        with open_tree(path, "Tracks4ptree") as tree:
+            stop = entries_to_read(tree, remaining)
+            names = set(tree.keys())
+
+            def branch(*options):
+                for option in options:
+                    if option in names:
+                        return option
+                raise SystemExit(f"{path} has none of {options}")
+
+            part = {
+                "theta": read_flat(tree, "Theta", stop).astype(float),
+                "phi": read_flat(tree, "Phi", stop).astype(float),
+            }
+            for view in ("xz", "xy"):
+                part[f"scat_{view}"] = read_flat(tree, f"Scattering_{view}", stop).astype(float)
+                part[f"chi3_{view}"] = read_flat(tree, f"ChiSquare_3p_{view}", stop).astype(float)
+                part[f"chi4_{view}"] = read_flat(tree, f"ChiSquare_{view}", stop).astype(float)
+            for plane in PLANES:
+                part[f"energy_{plane}"] = read_flat(tree, f"TrackClusterEnergy_{plane}", stop).astype(float)
+                part[f"position_{plane}"] = read_flat(tree, f"TrackClusterPosition_{plane}", stop).astype(float)
+                part[f"size_{plane}"] = read_flat(tree, f"TrackClusterSize_{plane}", stop).astype(float)
+                part[f"max_{plane}"] = read_flat(tree, f"TrackClusterMaxStripEnergy_{plane}", stop).astype(float)
+                part[f"mult_{plane}"] = read_flat(
+                    tree, branch(f"ClusterMultiplicity_{plane}", f"ClusterMultriplicity_{plane}"), stop).astype(float)
+                nontrack = read_jagged(tree, f"NonTrackClusterPosition_{plane}", stop)
+                part[f"ntc_{plane}"] = nontrack.counts
+                part[f"ntv_{plane}"] = nontrack.values.astype(float)
+            parts.append(part)
+
+        n_events += stop
+
+    joined = {key: np.concatenate([p[key] for p in parts]) for key in parts[0]}
+    views = lambda prefix: {v.upper(): joined[f"{prefix}_{v}"] for v in ("xz", "xy")}
+    planes = lambda prefix: {p: joined[f"{prefix}_{p}"] for p in PLANES}
+
+    return GoldenSample(
+        events=n_events, theta=joined["theta"], phi=joined["phi"],
+        scattering=views("scat"), chi2_3p=views("chi3"), chi2_4p=views("chi4"),
+        energy=planes("energy"), position=planes("position"), size=planes("size"),
+        max_strip=planes("max"), multiplicity=planes("mult"),
+        nontrack_position={p: Jagged(joined[f"ntc_{p}"], joined[f"ntv_{p}"]) for p in PLANES},
+    )
 
 
 # ==========================================================
@@ -609,6 +754,15 @@ def ratio(numerator: float, denominator: float) -> float:
 
 RATIO_LIMITS = (0.2, 5.0)
 RATIO_TICKS = [0.2, 0.33, 0.5, 0.67, 0.8, 1.0, 1.25, 1.5, 2.0, 3.0, 5.0]
+
+#: Agreement bands as two shades of one hue, so they read as nested; the
+#: plane-4 shading in a different hue. None clash with the sample colours.
+BAND_5 = "#e3d3a8"
+BAND_10 = "#f3ecd6"
+PLANE_4_SHADE = "#e8e2f4"
+
+LINE_TARGET = 1.4
+LINE_OTHER = 1.0
 
 
 @dataclass
@@ -662,13 +816,18 @@ def lollipop_summary(panels, samples, target, title, path, ncols=4, shade_label=
         x = np.arange(len(panel.categories))
 
         for column in panel.shaded:
-            ax.axvspan(column - 0.5, column + 0.5, color="0.94", zorder=0)
+            ax.axvspan(column - 0.5, column + 0.5, color=PLANE_4_SHADE, zorder=0)
         if panel.divider is not None:
             ax.axvline(panel.divider, color="0.6", lw=0.8, ls=":")
 
-        ax.axhspan(1 / 1.10, 1.10, color="0.87", zorder=0.5)
-        ax.axhspan(1 / 1.05, 1.05, color="0.75", zorder=0.6)
+        ax.axhspan(1 / 1.10, 1.10, color=BAND_10, zorder=0.5)
+        ax.axhspan(1 / 1.05, 1.05, color=BAND_5, zorder=0.6)
         ax.axhline(1.0, color="0.3", lw=0.9, zorder=0.7)
+
+        # labelling every off-scale point only stays readable with few categories;
+        # with many, the arrows remain and one note points to the summary CSV
+        label_points = len(panel.categories) <= 4
+        off_scale = False
 
         for k, other in enumerate(others):
             style = samples[other]
@@ -681,17 +840,23 @@ def lollipop_summary(panels, samples, target, title, path, ncols=4, shade_label=
 
                 xp = xi + offset
                 shown = min(max(value, low * 1.04), high / 1.04)
-                ax.plot([xp, xp], [1.0, shown], color=style.colour, lw=1.6, alpha=0.85, zorder=2)
+                ax.plot([xp, xp], [1.0, shown], color=style.colour, lw=1.3, alpha=0.85, zorder=2)
 
                 if low < value < high:
                     ax.plot(xp, shown, marker=style.marker, color=style.colour, ms=5.5,
                             mec="white", mew=0.5, zorder=3)
                 else:
                     below = value <= low
+                    off_scale = True
                     ax.plot(xp, shown, marker="v" if below else "^", color=style.colour, ms=7, zorder=3)
-                    ax.annotate(f"{value:.2f}", (xp, shown),
-                                xytext=(0, -(10 + 8 * k) if below else 4 + 8 * k),
-                                textcoords="offset points", ha="center", fontsize=6.5, color=style.colour)
+                    if label_points:
+                        ax.annotate(f"{value:.2f}", (xp, shown),
+                                    xytext=(0, -(10 + 8 * k) if below else 4 + 8 * k),
+                                    textcoords="offset points", ha="center", fontsize=6.5, color=style.colour)
+
+        if off_scale and not label_points:
+            ax.text(0.98, 0.97, "▲▼ beyond the axis: values in the summary CSV", transform=ax.transAxes,
+                    ha="right", va="top", fontsize=7, color="0.35")
 
         ax.set_title(panel.title, fontsize=11)
         ax.set_xticks(x, panel.categories, fontsize=9)
@@ -705,12 +870,12 @@ def lollipop_summary(panels, samples, target, title, path, ncols=4, shade_label=
         ax.set_ylabel(f"{target} ÷ sample", fontsize=10)
 
     handles = [
-        Line2D([], [], color=samples[o].colour, marker=samples[o].marker, lw=1.6, ms=7, label=f"{target} ÷ {o}")
+        Line2D([], [], color=samples[o].colour, marker=samples[o].marker, lw=1.3, ms=7, label=f"{target} ÷ {o}")
         for o in others
     ]
-    handles += [Patch(color="0.75", label="±5 %"), Patch(color="0.87", label="±10 %")]
+    handles += [Patch(color=BAND_5, label="±5 %"), Patch(color=BAND_10, label="±10 %")]
     if any(panel.shaded for panel in panels):
-        handles.append(Patch(color="0.94", label=shade_label))
+        handles.append(Patch(color=PLANE_4_SHADE, label=shade_label))
 
     fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False, fontsize=9.5)
     fig.suptitle(title, fontsize=13, y=0.995)
@@ -719,19 +884,40 @@ def lollipop_summary(panels, samples, target, title, path, ncols=4, shade_label=
     plt.close(fig)
 
 
-def distribution_grid(panels, samples, events, target, reference, title, path, ncols=4, min_count=100):
+def ratio_threshold(n_reference: int, min_count: int | None) -> int:
+    """Entries a reference bin needs before its ratio is drawn.
+
+    A fixed --min-count wins; otherwise it scales with the sample, from 10
+    entries for small samples up to 100 for large ones, so that panels
+    with few entries, such as four-plane quantities, still show a ratio.
+    """
+    if min_count is not None:
+        return min_count
+    return int(np.clip(round(n_reference / 2000), 10, 100))
+
+
+def distribution_grid(panels, samples, events, target, reference, title, path, ncols=4, min_count=None):
     """Each sample's normalised distribution, with target ÷ reference below.
 
     Distributions are fractions of each sample's entries. The ratio is
-    drawn only in bins where the reference has at least min_count entries.
+    drawn only in bins where the reference has enough entries; see
+    ratio_threshold.
     """
     plt = _pyplot()
     from matplotlib.lines import Line2D
 
     nrows = math.ceil(len(panels) / ncols)
     with_ratio = reference is not None
-    fig = plt.figure(figsize=(4.2 * ncols, (4.0 if with_ratio else 3.1) * nrows))
-    grid = fig.add_gridspec(nrows, ncols, hspace=0.42, wspace=0.28)
+    legend_columns = min(len(samples), max(2, ncols))
+    legend_rows = math.ceil(len(samples) / legend_columns)
+
+    # the title and legend get their own band above the panels, sized for
+    # the number of legend rows, so they never overlap the panel titles
+    header = 0.75 + 0.36 * legend_rows
+    height = (4.0 if with_ratio else 3.1) * nrows + header
+    fig = plt.figure(figsize=(4.2 * ncols, height))
+    grid = fig.add_gridspec(nrows, ncols, hspace=0.42, wspace=0.28,
+                            top=1 - header / height, bottom=0.55 / height)
 
     for index, panel in enumerate(panels):
         cell = grid[index // ncols, index % ncols]
@@ -749,7 +935,7 @@ def distribution_grid(panels, samples, events, target, reference, title, path, n
             counts[name], _ = np.histogram(values, bins=panel.bins)
             fractions[name] = counts[name] / max(len(values), 1)
             ax.stairs(fractions[name], panel.bins, color=style.colour,
-                      lw=2.0 if name == target else 1.4, zorder=3 if name == target else 2)
+                      lw=LINE_TARGET if name == target else LINE_OTHER, zorder=3 if name == target else 2)
 
         if panel.logy:
             ax.set_yscale("log")
@@ -764,7 +950,7 @@ def distribution_grid(panels, samples, events, target, reference, title, path, n
         if ax_ratio is not None:
             plt.setp(ax.get_xticklabels(), visible=False)
             centres = 0.5 * (panel.bins[1:] + panel.bins[:-1])
-            shown = counts[reference] >= min_count
+            shown = counts[reference] >= ratio_threshold(len(panel.values[reference]), min_count)
             values = np.full(len(centres), np.nan)
             ok = shown & (fractions[reference] > 0)
             values[ok] = fractions[target][ok] / fractions[reference][ok]
@@ -786,13 +972,13 @@ def distribution_grid(panels, samples, events, target, reference, title, path, n
             ax.set_xlabel(panel.xlabel, fontsize=8.5)
 
     handles = [
-        Line2D([], [], color=style.colour, lw=2.0 if name == target else 1.4,
-               label=f"{style.label} ({events[name]:,} events)")
+        Line2D([], [], color=style.colour, lw=LINE_TARGET if name == target else LINE_OTHER,
+               label=f"{style.display} ({events[name]:,} events)")
         for name, style in samples.items()
     ]
-    fig.legend(handles=handles, loc="upper center", ncol=min(len(handles), max(2, ncols)), frameon=False,
-               fontsize=9.5, bbox_to_anchor=(0.5, 0.995))
-    fig.suptitle(title, fontsize=12.5, y=1.035)
+    fig.suptitle(title, fontsize=12.5, y=1 - 0.12 / height, va="top")
+    fig.legend(handles=handles, loc="upper center", ncol=legend_columns, frameon=False,
+               fontsize=9.5, bbox_to_anchor=(0.5, 1 - 0.5 / height))
     fig.savefig(path, dpi=140, bbox_inches="tight")
     plt.close(fig)
 
@@ -828,12 +1014,15 @@ def print_summary(rows: list[SummaryRow], samples, target, title: str) -> None:
     print("=" * 80)
     print(title)
     print("=" * 80)
-    print(f"{'observable':<26}{'':<6}" + "".join(f"{c:>{width}}" for c in columns))
+    observable_width = max(26, max(len(row.observable) for row in rows) + 2)
+    category_width = max(6, max(len(row.category) for row in rows) + 2)
+    print(f"{'observable':<{observable_width}}{'':<{category_width}}" + "".join(f"{c:>{width}}" for c in columns))
 
     for row in rows:
         cells = [_fmt(row.values[name]) for name in names]
         cells += [_fmt(ratio(row.values[target], row.values[o])) if row.with_ratio else "" for o in others]
-        print(f"{row.observable:<26}{row.category:<6}" + "".join(f"{cell:>{width}}" for cell in cells))
+        print(f"{row.observable:<{observable_width}}{row.category:<{category_width}}"
+              + "".join(f"{cell:>{width}}" for cell in cells))
 
 
 def write_summary(rows: list[SummaryRow], samples, target, path: Path) -> None:
@@ -849,16 +1038,19 @@ def write_summary(rows: list[SummaryRow], samples, target, path: Path) -> None:
             writer.writerow([row.observable, row.category] + [row.values[n] for n in names] + ratios)
 
 
-def write_run_info(path: Path, phase: int, samples, files, events, target, reference, max_events) -> None:
+def write_run_info(path: Path, phase: int, samples, files, events, target, reference, max_events,
+                   direction: str = "all") -> None:
     info = {
         "phase": phase,
         "target": target,
         "reference": reference,
         "max_events": max_events,
+        "direction": direction,
         "samples": {
             name: {
                 "kind": sample.kind,
                 "label": sample.label,
+                "reco_version": sample.reco_version,
                 "events": events[name],
                 "files": [str(f) for f in files[name]],
                 "code": read_provenance_commit(files[name][0]) if sample.kind == "sim" else None,
@@ -882,7 +1074,7 @@ def _fmt(value) -> str:
 # ==========================================================
 
 
-def argument_parser(description: str, default_out: str) -> argparse.ArgumentParser:
+def argument_parser(description: str, default_out: str, with_direction: bool = False) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=description,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -899,8 +1091,13 @@ def argument_parser(description: str, default_out: str) -> argparse.ArgumentPars
                         help="read at most N events per sample, for quick runs")
     parser.add_argument("--out", type=Path, default=Path(default_out),
                         help=f"output directory (default: {default_out})")
-    parser.add_argument("--min-count", type=int, default=100, metavar="N",
-                        help="show a ratio only where the reference bin has N entries (default: 100)")
+    parser.add_argument("--min-count", type=int, metavar="N",
+                        help="show a ratio only where the reference bin has N entries "
+                             "(default: scales with the sample, 10 to 100)")
+    if with_direction:
+        parser.add_argument("--direction", choices=DIRECTIONS, default="all",
+                            help="restrict track quantities to forward (90 < phi < 270) or backward tracks "
+                                 "(default: all)")
     return parser
 
 
@@ -910,4 +1107,5 @@ def describe_samples(samples, files, events, target, reference) -> None:
     print("--------------------------------------------------")
     for name, sample in samples.items():
         role = " (target)" if name == target else (" (reference)" if name == reference else "")
-        print(f"  {name:<10} {sample.kind:<5} {events[name]:>12,} events  {len(files[name])} file(s){role}")
+        version = f"  [{sample.reco_version}]" if sample.reco_version else ""
+        print(f"  {name:<10} {sample.kind:<5} {events[name]:>12,} events  {len(files[name])} file(s){version}{role}")

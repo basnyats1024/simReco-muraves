@@ -1,26 +1,33 @@
 {
-  "_readme": "Copy to samples.json (gitignored) and edit the paths. A file entry may be a ROOT file, a directory of ROOT files, a glob pattern, or a list of these. Simulation samples need 'clustered' (phase I) and 'tracked' (phase II); data samples need 'analyzed'. Optional per sample: 'label', 'colour', 'marker', and for data 'detector' when the name is not NERO, ROSSO or BLU. Add further simulation samples, e.g. an older production, to compare simulation versions with --target.",
+  "_readme": "Copy to samples.json (gitignored) and edit the paths. A file entry may be a ROOT file, a directory of ROOT files, a glob pattern, or a list of these. Simulation samples need 'clustered' (phase I), 'tracked' (phase II) and 'golden' (phase III); data samples need 'analyzed' (phases I and II) and 'golden' (phase III). Optional per sample: 'label', 'colour', 'marker', 'reco_version' (shown in legends, titles and tables, and recorded in the run information), and for data 'detector' when the name is not NERO, ROSSO or BLU. Add further simulation samples, e.g. an older production, to compare simulation versions with --target.",
   "samples": {
     "SIM": {
       "kind": "sim",
       "label": "SIM fullRun_v3",
       "clustered": "/path/to/simReco_output/fullRun_v3/clustered",
-      "tracked": "/path/to/simReco_output/fullRun_v3/tracked"
+      "tracked": "/path/to/simReco_output/fullRun_v3/tracked",
+      "golden": "/path/to/simReco_output/fullRun_v3/golden"
     },
     "NERO": {
       "kind": "data",
       "label": "NERO 6780-6835",
-      "analyzed": "/path/to/expData/MURAVES_AnalyzedData_NERO_run6780-6835_v1.root"
+      "reco_version": "v1-rc1",
+      "analyzed": "/path/to/expData/MURAVES_AnalyzedData_NERO_run6780-6835_v1.root",
+      "golden": "/path/to/expData/golden_v1rc1/MURAVES_AnalyzedData_NERO_run6780-6835_v1_golden.root"
     },
     "ROSSO": {
       "kind": "data",
       "label": "ROSSO 3780-3818",
-      "analyzed": "/path/to/expData/MURAVES_AnalyzedData_ROSSO_run3780-3818_v1.root"
+      "reco_version": "v1-rc1",
+      "analyzed": "/path/to/expData/MURAVES_AnalyzedData_ROSSO_run3780-3818_v1.root",
+      "golden": "/path/to/expData/golden_v1rc1/MURAVES_AnalyzedData_ROSSO_run3780-3818_v1_golden.root"
     },
     "BLU": {
       "kind": "data",
       "label": "BLU 8822-8865",
-      "analyzed": "/path/to/expData/MURAVES_AnalyzedData_BLU_run8822-8865_v1.root"
+      "reco_version": "v1-rc1",
+      "analyzed": "/path/to/expData/MURAVES_AnalyzedData_BLU_run8822-8865_v1.root",
+      "golden": "/path/to/expData/golden_v1rc1/MURAVES_AnalyzedData_BLU_run8822-8865_v1_golden.root"
     }
   }
 }

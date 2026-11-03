@@ -22,6 +22,13 @@ Writes to --out:
 
 Residuals and chi-square are taken from the best three-plane track of
 each view; the four-plane quantities from the selected four-plane track.
+
+--direction forward|backward restricts track quantities to tracks inside
+or outside the field of view (90 < phi < 270): 3p quantities by the 3p
+track's phi, 4p quantities by the 4p track's. In the real setup Mt.
+Vesuvius lies behind the telescope and absorbs low-elevation backward
+muons, which the simulation has no mountain for; forward tracks give the
+fair comparison of angles. Tracks per event stay counted over all events.
 Cluster timing is left out: the simulated cluster time and the data's
 Texp are not the same quantity.
 """
@@ -114,7 +121,7 @@ def distribution_figures(tracks):
 
 
 def main() -> None:
-    parser = c.argument_parser(__doc__, "analysis_output/phase2")
+    parser = c.argument_parser(__doc__, "analysis_output/phase2", with_direction=True)
     arguments = parser.parse_args()
 
     samples = c.load_samples(arguments.config, arguments.samples)
@@ -125,7 +132,7 @@ def main() -> None:
     for name, sample in samples.items():
         files[name] = c.files_for(sample, phase=2)
         print(f"reading {name} ({len(files[name])} file(s)) ...", flush=True)
-        tracks[name] = c.read_tracks(sample, files[name], arguments.max_events)
+        tracks[name] = c.read_tracks(sample, files[name], arguments.max_events, arguments.direction)
 
     events = {name: data.events for name, data in tracks.items()}
     c.describe_samples(samples, files, events, target, reference)
@@ -146,13 +153,15 @@ def main() -> None:
             for i, category in enumerate(categories)
         ]
 
-    c.print_summary(rows, samples, target, "Phase II — track-level summary")
+    notes = [n for n in (c.version_note(samples), "" if arguments.direction == "all" else f"{arguments.direction} tracks") if n]
+    suffix = f"  ({'; '.join(notes)})" if notes else ""
+    c.print_summary(rows, samples, target, f"Phase II — track-level summary{suffix}")
     c.write_summary(rows, samples, target, arguments.out / "phase2_summary.csv")
 
     if len(samples) > 1:
         c.lollipop_summary(
             panels, samples, target,
-            f"Phase II — track-level summary, {target} ÷ sample",
+            f"Phase II — track-level summary, {target} ÷ sample{suffix}",
             arguments.out / "phase2_summary.png",
             ncols=3,
         )
@@ -161,12 +170,12 @@ def main() -> None:
     for key, title, columns, figure_panels in distribution_figures(tracks):
         c.distribution_grid(
             figure_panels, samples, events, target, reference,
-            f"Phase II — {title}", arguments.out / f"phase2_{key}.png",
+            f"Phase II — {title}{suffix}", arguments.out / f"phase2_{key}.png",
             ncols=columns, min_count=arguments.min_count,
         )
 
     c.write_run_info(arguments.out / "phase2_run_info.json", 2, samples, files, events,
-                     target, reference, arguments.max_events)
+                     target, reference, arguments.max_events, arguments.direction)
 
     print()
     print(f"Written to {arguments.out}/")

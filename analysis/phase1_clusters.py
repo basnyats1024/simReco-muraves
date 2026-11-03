@@ -89,13 +89,15 @@ def main() -> None:
             for i, plane in enumerate(c.PLANES)
         ]
 
-    c.print_summary(rows, samples, target, "Phase I — cluster-level summary")
+    note = c.version_note(samples)
+    suffix = f"  ({note})" if note else ""
+    c.print_summary(rows, samples, target, f"Phase I — cluster-level summary{suffix}")
     c.write_summary(rows, samples, target, arguments.out / "phase1_summary.csv")
 
     if len(samples) > 1:
         c.lollipop_summary(
             panels, samples, target,
-            f"Phase I — cluster-level summary, {target} ÷ sample",
+            f"Phase I — cluster-level summary, {target} ÷ sample{suffix}",
             arguments.out / "phase1_summary.png",
             shade_label="plane 4 (not in the data trigger)",
         )
@@ -111,7 +113,7 @@ def main() -> None:
         ]
         c.distribution_grid(
             panels, samples, events, target, reference,
-            f"Phase I — {title.lower()}", arguments.out / f"phase1_{key}.png",
+            f"Phase I — {title.lower()}{suffix}", arguments.out / f"phase1_{key}.png",
             ncols=4, min_count=arguments.min_count,
         )
 
