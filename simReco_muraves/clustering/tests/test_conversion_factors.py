@@ -2,7 +2,7 @@
 
 """Conversion-factor options and the per-station digitizer.
 
-Covers the rules between --pe-per-mev, --pe-per-mev-file, --detector
+Covers the rules between --pe-per-mev, --pe-per-cok m-file, --detector
 and --run-range; validation of resolved factors; the digitizer's
 per-station path; and the property per-plane factor studies rely on:
 changing one station's factor leaves every other station's random
@@ -10,6 +10,8 @@ numbers untouched.
 """
 
 from __future__ import annotations
+
+import json
 
 import pytest
 
@@ -78,10 +80,57 @@ def test_invalid_factors_are_rejected(factors):
         cf.validate_conversion_factors(factors)
 
 
-def test_resolver_is_still_a_stub(tmp_path):
-    with pytest.raises(NotImplementedError, match="resolve_conversion_factors"):
-        cf.resolve_conversion_factors(tmp_path / "f.json", "ROSSO", (1, 2))
+def write_npecm_file(tmp_path):
+    """Run 1 and run 2 ROSSO runs of setting wp25_b: 10 and 8 NPE/cm on every plane, run 3 wp20_a: 6 NPE/cm on every plane"""
+    path = tmp_path / "npecm.json"
+    path.write_text(json.dumps({
+        "ROSSO": {
+            "1": {
+                "set": "wp25_b",
+                "Y1": 10.0, "Y2": 10.0, "Y3": 10.0, "Y4": 10.0,
+                "Z1": 10.0, "Z2": 10.0, "Z3": 10.0, "Z4": 10.0,
+            },
+            "2": {
+                "set": "wp25_b",
+                "Y1": 8.0, "Y2": 8.0, "Y3": 8.0, "Y4": 8.0,
+                "Z1": 8.0, "Z2": 8.0, "Z3": 8.0, "Z4": 8.0,
+            },
 
+            "3": {
+                "set": "wp20_a",
+                "Y1": 6.0, "Y2": 6.0, "Y3": 6.0, "Y4": 6.0,
+                "Z1": 6.0, "Z2": 6.0, "Z3": 6.0, "Z4": 6.0,
+            },            
+        }
+    }))
+    return path
+
+
+def test_resolver_averages_the_runs_of_the_range(tmp_path):
+    factors, summary, warnings = cf.resolve_conversion_factors(
+        write_npecm_file(tmp_path), "ROSSO", (1, 2)
+    )
+
+    assert factors == {
+        0: 9.0, 1: 9.0, 2: 9.0, 3: 9.0,
+        8: 9.0, 9: 9.0, 10: 9.0, 11: 9.0,
+    }
+    assert summary["run_range"] == "1-2"
+    assert summary["good_runs"] == 2
+    assert warnings == ()
+
+def test_resolver_warns_when_the_range_spans_two_settings(tmp_path):
+    factors, summary, warnings = cf.resolve_conversion_factors(
+        write_npecm_file(tmp_path), "ROSSO", (1, 3)
+    )
+
+    assert factors[0] == 8.0
+    assert summary["settings_in_range"] == {"wp20_a": 1, "wp25_b": 2}
+    assert summary["multi_setting"]
+    assert len(warnings) == 1
+    assert "spans 2 settings" in warnings[0]
+
+    
 
 # ----------------------------------------------------------------------
 # Rules between the options
@@ -93,7 +142,7 @@ RESOLVED = {0: 8.0, 1: 9.0, 8: 7.5}
 def setup(**overrides):
     values = dict(
         pe_per_mev=None,
-        pe_per_mev_file=None,
+        pe_per_cm_file=None,
         detector=None,
         run_range=None,
         default_pe_per_mev=8.5,
@@ -110,14 +159,16 @@ def factors_file(tmp_path, monkeypatch):
     monkeypatch.setattr(
         cf,
         "resolve_conversion_factors",
-        lambda file, detector, run_range: dict(RESOLVED),
+        lambda file, detector, run_range: (
+            dict(RESOLVED),  {"run_range": "10061-11918"}, ()
+        ),
     )
     return path
 
 
 def with_file(factors_file, **overrides):
     values = dict(
-        pe_per_mev_file=factors_file,
+        pe_per_cm_file=factors_file,
         detector="ROSSO",
         run_range=(10061, 11918),
     )
@@ -153,17 +204,17 @@ def test_detector_or_run_range_without_file_is_rejected(overrides):
         setup(**overrides)
 
 
-@pytest.mark.parametrize(
-    "missing, message",
-    [
-        ({"detector": None}, "--detector"),
-        ({"run_range": None}, "--run-range"),
-        ({"detector": None, "run_range": None}, "--detector and --run-range"),
-    ],
-)
-def test_file_requires_detector_and_run_range(factors_file, missing, message):
-    with pytest.raises(ValueError, match=message):
-        with_file(factors_file, **missing)
+# @pytest.mark.parametrize(
+#     "missing, message",
+#     [
+#         ({"detector": None}, "--detector"),
+#         ({"run_range": None}, "--run-range"),
+#         ({"detector": None, "run_range": None}, "--detector and --run-range"),
+#     ],
+# )
+def test_file_requires_detector(factors_file):
+    with pytest.raises(ValueError, match="requires --detector"):
+        with_file(factors_file, detector=None)
 
 
 def test_unknown_detector_is_rejected(factors_file):
@@ -174,7 +225,7 @@ def test_unknown_detector_is_rejected(factors_file):
 def test_missing_file_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="not found"):
         setup(
-            pe_per_mev_file=tmp_path / "absent.json",
+            pe_per_cm_file=tmp_path / "absent.json",
             detector="ROSSO",
             run_range=(1, 2),
         )
@@ -190,40 +241,51 @@ def test_file_mode(factors_file):
     assert result.provenance["detector"] == "ROSSO"
     assert result.provenance["run_range"] == "10061-11918"
     assert result.provenance["pe_per_mev"] is None
-    assert result.provenance["pe_per_mev_by_station"] == {
+    assert result.provenance["digitization_method"] == "npe_per_cm"
+    assert result.provenance["pe_per_cm_by_station"] == {
         "0": 8.0,
         "1": 9.0,
         "8": 7.5,
     }
-    assert len(result.provenance["pe_per_mev_file_sha256"]) == 64
+    assert len(result.provenance["pe_per_cm_file_sha256"]) == 64
 
 
-def test_file_wins_over_explicit_factor(factors_file):
-    result = with_file(factors_file, pe_per_mev=4.0)
+    
+def test_file_and_explicit_factor_is_an_error(factors_file):
+    with pytest.raises(ValueError, match="two different digitization methods"):
+        with_file(factors_file, pe_per_mev=4.0)
 
-    assert result.per_station
-    assert result.factors == RESOLVED
-    assert len(result.warnings) == 1
-    assert "ignored" in result.warnings[0]
-
+        
 
 def test_resolved_factors_are_validated(factors_file, monkeypatch):
     monkeypatch.setattr(
         cf,
         "resolve_conversion_factors",
-        lambda file, detector, run_range: {0: -1.0},
+        lambda file, detector, run_range: (
+            {0: -1.0}, {"run_range": "10061-11918"}, ()
+        ),
     )
 
     with pytest.raises(ValueError, match="positive and finite"):
         with_file(factors_file)
 
 
-def test_stub_stops_file_mode_until_implemented(tmp_path):
-    path = tmp_path / "factors.json"
-    path.write_text("{}")
+# def test_stub_stops_file_mode_until_implemented(tmp_path):
+#     path = tmp_path / "factors.json"
+#     path.write_text("{}")
 
-    with pytest.raises(NotImplementedError):
-        setup(pe_per_mev_file=path, detector="ROSSO", run_range=(1, 2))
+#     with pytest.raises(NotImplementedError):
+#         setup(pe_per_cm_file=path, detector="ROSSO", run_range=(1, 2))
+
+def test_file_without_run_range_uses_the_fallback_setting(tmp_path):
+    result = setup(pe_per_cm_file=write_npecm_file(tmp_path), detector="ROSSO")
+
+    assert result.per_station
+    assert result.factors[0] == 9.0
+    assert result.tag == "_ROSSO_rwp25_b"
+    assert result.provenance["run_range"] == "wp25_b"
+    assert len(result.warnings) == 1
+    assert "fallback" in result.warnings[0]
 
 
 def test_provenance_has_the_same_keys_in_both_modes(factors_file):
@@ -231,9 +293,9 @@ def test_provenance_has_the_same_keys_in_both_modes(factors_file):
 
 
 def test_checksum_follows_file_content(factors_file):
-    before = with_file(factors_file).provenance["pe_per_mev_file_sha256"]
+    before = with_file(factors_file).provenance["pe_per_cm_file_sha256"]
     factors_file.write_text('{"edited": true}')
-    after = with_file(factors_file).provenance["pe_per_mev_file_sha256"]
+    after = with_file(factors_file).provenance["pe_per_cm_file_sha256"]
 
     assert before != after
 

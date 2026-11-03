@@ -24,9 +24,22 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+import json
+from collections import Counter
 
+from simReco_muraves.tracking.event_builder_adapter import STATION_MAP
 
 DETECTORS = ("NERO", "ROSSO", "BLU")
+
+PLANES = ("Y1", "Y2", "Y3", "Y4", "Z1", "Z2", "Z3", "Z4")
+
+NPECM_VALID = (5.0, 15.0) #Based on current fit range, might change later
+
+FALLBACK_SETTING = {
+    "NERO": "wp25_a",
+    "BLU": "wp25_a",
+    "ROSSO": "wp25_b",
+}
 
 RunRange = tuple[int, int]
 
@@ -61,51 +74,139 @@ def format_run_range(run_range: RunRange) -> str:
 
 
 # ----------------------------------------------------------------------
-# The stub
+# NPE per cm from the good-run file
 # ----------------------------------------------------------------------
 
+def _plane_station_map() -> dict[str, int]:
+    """Plane name (Y1 ... Z4) -> station ID, from STATION_MAP."""
+    return {
+        plane.upper(): station
+        for station, plane in STATION_MAP.items()
+    }
+
+
+def _runs_in_range(
+    block: Mapping[str, Any],
+    detector: str,
+    run_range: RunRange | None,
+) -> dict[int, Mapping[str, Any]]:
+    """The runs to average: those inside run_range, or, without a range,
+    those of the detector's FALLBACK_SETTING. Only good runs are in the
+    file, so gaps in the run numbers are normal."""
+    runs = {
+        int(key): entry
+        for key, entry in block.items()
+        if key.isdigit()
+    }
+
+    if run_range is None:
+        setting = FALLBACK_SETTING[detector]
+        selected = {
+            run: entry
+            for run, entry in runs.items()
+            if entry.get("set") == setting
+        }
+        selection = f"fallback setting {setting}"
+    else:
+        start, end = run_range
+        selected = {
+            run: entry
+            for run, entry in runs.items()
+            if start <= run <= end
+        }
+        selection = f"run range {format_run_range(run_range)}"
+
+    if not selected:
+        raise ValueError(
+            f"{selection} is not in the good-run list of {detector}"
+        )
+
+    return selected
+
+
+
+
+# ----------------------------------------------------------------------
+# resolver
+# ----------------------------------------------------------------------
 def resolve_conversion_factors(
     path: Path,
     detector: str,
-    run_range: RunRange,
-) -> dict[int, float]:
-    """Per-station conversion factors for one detector and run range.
+    run_range: RunRange | None,
+) -> tuple[dict[int, float], dict[str, Any], tuple[str, ...]]:
+    """NPE/cm per station for one detector, from the good-run file"""
+    try:
+        with open(path) as json_file:
+            data = json.load(json_file)
+            
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read the file {path}: {error}") from None
 
-    NOT IMPLEMENTED YET. This is where the factors file is read.
+    if detector not in data:
+        raise ValueError(f"{detector} is not in the file {path}")
 
-    Contract
-    --------
-    Return a mapping from **station ID** to a conversion factor in
-    **nPE per MeV**. Station IDs are the integers the digitizer sees on
-    every BarHit (0, 1, 2, 3, 8, 9, 10, 11 in the current geometry).
-    The station-to-plane mapping is STATION_MAP in
-    simReco_muraves/tracking/event_builder_adapter.py: stations 0-3 are
-    Y1-Y4 and 8-11 are Z1-Z4. Use it rather than keeping a second copy.
+    runs = _runs_in_range(data[detector], detector, run_range)
 
-    - The file format is yours to design. If it is keyed by plane name
-      (Z1 ... Y4) or anything else, translating to station IDs happens
-      here, so the digitizer never needs to know about names.
-    - Return a factor for every station that will appear in the input.
-      A missing station is not defaulted: digitization stops with an
-      error naming it.
-    - How a run range that spans more than one calibration is handled
-      is yours to decide. Raising is the safe default; silently picking
-      one or averaging is not.
-    - The result is passed through validate_conversion_factors(), so
-      malformed values are caught even if this function lets them by.
+    if run_range is None:
+        range_text = FALLBACK_SETTING[detector]
+    else:
+        range_text = format_run_range(run_range)
 
-    The caller has already checked that ``path`` exists, that
-    ``detector`` is one of DETECTORS, and that ``run_range`` is a valid
-    (start, end) pair with start <= end.
-    """
-    raise NotImplementedError(
-        "reading per-station conversion factors from a file is not "
-        "implemented yet. Implement resolve_conversion_factors() in "
-        "simReco_muraves/clustering/conversion_factors.py; its docstring "
-        "describes what it must return. Until then, use --pe-per-mev."
-    )
+    low, high = NPECM_VALID
+    npe_per_cm = {}
+    used, null, rejected = {}, {}, {}
 
+    for plane in PLANES:
+        values = [entry.get(plane) for entry in runs.values()]
+        valid = [v for v in values if v is not None and low <= v <= high]
 
+        used[plane] = len(valid)
+        null[plane] = sum(v is None for v in values)
+        rejected[plane] = len(values) - len(valid) - null[plane]
+
+        if not valid:
+            raise ValueError(
+                f"{detector} {plane} has no valid NPE/cm in {range_text} "
+                f"({null[plane]} null, {rejected[plane]} outside "
+                f"[{low}, {high}])"
+            )
+
+        npe_per_cm[plane] = sum(valid) / len(valid)
+
+    settings = dict(sorted(Counter(
+        entry.get("set") for entry in runs.values()
+    ).items()))
+
+    warnings = []
+
+    if run_range is None:
+        warnings.append(
+            f"no --run-range: using the {detector} fallback setting "
+            f"{range_text} ({len(runs)} runs)"
+        )
+
+    if len(settings) > 1:
+        listed = ", ".join(f"{name} ({n} runs)" for name, n in settings.items())
+        warnings.append(
+            f"run range {range_text} spans {len(settings)} settings: {listed}"
+        )
+
+    station_of = _plane_station_map()
+    factors = {station_of[plane]: value for plane, value in npe_per_cm.items()}
+
+    summary = {
+        "run_range": range_text,
+        "good_runs": len(runs),
+        "npe_per_cm_by_plane": npe_per_cm,
+        "runs_used_by_plane": used,
+        "runs_null_by_plane": null,
+        "runs_rejected_by_plane": rejected,
+        "settings_in_range": settings,
+        "multi_setting": len(settings) > 1,
+    }
+    return factors, summary, tuple(warnings)
+            
+  
 # ----------------------------------------------------------------------
 # Validation
 # ----------------------------------------------------------------------
@@ -202,11 +303,11 @@ class DigitizationSetup:
     def per_station(self) -> bool:
         return isinstance(self.factors, dict)
 
-
+    
 def digitization_setup(
     *,
     pe_per_mev: float | None,
-    pe_per_mev_file: str | Path | None,
+    pe_per_cm_file: str | Path | None,
     detector: str | None,
     run_range: RunRange | None,
     default_pe_per_mev: float,
@@ -219,7 +320,7 @@ def digitization_setup(
     - With a file: --detector and --run-range are both required, and the
       file wins over --pe-per-mev, with a warning if both were given.
     """
-    if pe_per_mev_file is None:
+    if pe_per_cm_file is None:
         stray = [
             name
             for name, value in (
@@ -232,10 +333,10 @@ def digitization_setup(
         if stray:
             raise ValueError(
                 f"{' and '.join(stray)} can only be used together with "
-                "--pe-per-mev-file; without a file it would have no "
+                "--pe-per-cm-file; without a file it would have no "
                 "effect"
             )
-
+ 
         factor = _validate_single_factor(
             default_pe_per_mev if pe_per_mev is None else pe_per_mev
         )
@@ -243,28 +344,25 @@ def digitization_setup(
         return DigitizationSetup(
             factors=factor,
             provenance={
+                "digitization_method": "energy",
                 "pe_per_mev": factor,
-                "pe_per_mev_file": None,
-                "pe_per_mev_file_sha256": None,
+                "pe_per_cm_file": None,
+                "pe_per_cm_file_sha256": None,
                 "detector": None,
                 "run_range": None,
-                "pe_per_mev_by_station": None,
+                "pe_per_cm_by_station": None,
+                "calibration": None,
             },
         )
 
-    missing = [
-        name
-        for name, value in (
-            ("--detector", detector),
-            ("--run-range", run_range),
-        )
-        if value is None
-    ]
-
-    if missing:
+    if pe_per_mev is not None:
         raise ValueError(
-            f"--pe-per-mev-file requires {' and '.join(missing)}"
+            "--pe-per-mev and --pe-per-cm-file select two different digitization methods; give only one"
         )
+
+    if detector is None:
+        raise ValueError("--pe-per-cm-file requires --detector")
+
 
     if detector not in DETECTORS:
         raise ValueError(
@@ -272,38 +370,34 @@ def digitization_setup(
             f"{', '.join(DETECTORS)}"
         )
 
-    path = Path(pe_per_mev_file).expanduser().resolve()
+    path = Path(pe_per_cm_file).expanduser().resolve()
 
     if not path.is_file():
         raise ValueError(f"conversion-factor file not found: {path}")
 
-    warnings: tuple[str, ...] = ()
+ 
 
-    if pe_per_mev is not None:
-        warnings = (
-            f"--pe-per-mev {pe_per_mev} is ignored: "
-            "--pe-per-mev-file takes precedence",
-        )
-
-    factors = validate_conversion_factors(
-        resolve_conversion_factors(path, detector, run_range)
+    factors, summary, warnings = resolve_conversion_factors(
+        path, detector, run_range
     )
+    factors = validate_conversion_factors(factors)
 
-    range_text = format_run_range(run_range)
 
     return DigitizationSetup(
         factors=factors,
         provenance={
+            "digitization_method": "npe_per_cm",
             "pe_per_mev": None,
-            "pe_per_mev_file": str(path),
-            "pe_per_mev_file_sha256": file_sha256(path),
+            "pe_per_cm_file": str(path),
+            "pe_per_cm_file_sha256": file_sha256(path),
             "detector": detector,
-            "run_range": range_text,
-            "pe_per_mev_by_station": {
+            "run_range": summary["run_range"],
+            "pe_per_cm_by_station": {
                 str(station): factor
                 for station, factor in sorted(factors.items())
             },
+            "calibration": summary,
         },
-        tag=f"_{detector}_r{range_text}",
+        tag=f"_{detector}_r{summary['run_range']}",
         warnings=warnings,
     )
