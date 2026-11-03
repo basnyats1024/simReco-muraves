@@ -100,7 +100,14 @@ def write_npecm_file(tmp_path):
                 "set": "wp20_a",
                 "Y1": 6.0, "Y2": 6.0, "Y3": 6.0, "Y4": 6.0,
                 "Z1": 6.0, "Z2": 6.0, "Z3": 6.0, "Z4": 6.0,
-            },            
+            },
+
+            "5": {
+                "set": "wp20_a",
+                "Y1": 6.0, "Y2": 6.0, "Y3": 6.0, "Y4": 6.0,
+                "Z1": 6.0, "Z2": None, "Z3": 6.0, "Z4": 6.0,
+            },
+            
         }
     }))
     return path
@@ -130,8 +137,41 @@ def test_resolver_warns_when_the_range_spans_two_settings(tmp_path):
     assert len(warnings) == 1
     assert "spans 2 settings" in warnings[0]
 
-    
 
+
+
+
+def test_resolver_skips_gaps_and_null_values(tmp_path):
+    factors, summary, warnings = cf.resolve_conversion_factors(
+        write_npecm_file(tmp_path), "ROSSO", (3, 5)
+    )
+
+    assert factors[0] == 6.0
+    assert summary["good_runs"] == 2
+    assert summary["runs_used_by_plane"]["Z2"] == 1
+    assert summary["runs_null_by_plane"]["Z2"] == 1
+
+
+def test_resolver_rejects_a_range_without_good_runs(tmp_path):
+    with pytest.raises(ValueError, match="not in the good-run list"):
+        cf.resolve_conversion_factors(
+            write_npecm_file(tmp_path), "ROSSO", (100, 200)
+        )
+
+
+def test_resolver_rejects_a_plane_without_valid_runs(tmp_path):
+    with pytest.raises(ValueError, match="Z2 has no valid NPE/cm"):
+        cf.resolve_conversion_factors(
+            write_npecm_file(tmp_path), "ROSSO", (5, 5)
+        )
+
+
+def test_resolver_rejects_a_detector_missing_from_the_file(tmp_path):
+    with pytest.raises(ValueError, match="NERO is not in the file"):
+        cf.resolve_conversion_factors(
+            write_npecm_file(tmp_path), "NERO", (1, 2)
+        )
+        
 # ----------------------------------------------------------------------
 # Rules between the options
 # ----------------------------------------------------------------------
@@ -407,7 +447,7 @@ def test_cli_detector_is_case_insensitive():
     arguments = cli().parse_arguments(
         [
             "hits.root",
-            "--pe-per-mev-file", "factors.json",
+            "--pe-per-cm-file", "factors.json",
             "--detector", "rosso",
             "--run-range", "10061-11918",
         ]

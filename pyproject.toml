@@ -12,6 +12,7 @@ dependencies = [
     "uproot",
     "awkward",
     "numpy",
+    "scipy>=1.16",
 ]
 
 [project.optional-dependencies]

@@ -12,6 +12,7 @@ import argparse
 from pathlib import Path
 
 from simReco_muraves.clustering.sim_clusterizer import (
+    LandauPathDigitizer,
     PoissonDigitizer,
     SimClusterizer,
     aggregate_bar_hits,
@@ -80,7 +81,7 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Chunk filename prefix "
             "(default: <input stem>_clustered, with the detector and "
-            "run range inserted when --pe-per-mev-file is used)."
+            "run range inserted when --pe-per-cm-file is used)."
         ),
     )
 
@@ -89,19 +90,21 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=None,
         help=(
-            "One photoelectron yield per MeV for every plane "
-            f"(default: {DEFAULT_PE_PER_MEV}). Ignored, with a warning, "
-            "when --pe-per-mev-file is given."
+            "Energy method: One photoelectron yield per MeV for every plane "
+            f"(default: {DEFAULT_PE_PER_MEV}). Cannot be combined "
+            "with --pe-per-cm-file."
         ),
     )
 
     parser.add_argument(
-        "--pe-per-mev-file",
+        "--pe-per-cm-file",
         type=Path,
         default=None,
         help=(
-            "Read per-plane yields from a file. Requires --detector "
-            "and --run-range, and takes precedence over --pe-per-mev."
+            "Path-length method: Read per-plane yields from a file. "
+            "Requires --detector. "
+            "--run-range is optional, without run-range detector's fallback "
+            "setting is used. "
         ),
     )
 
@@ -110,7 +113,7 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         type=str.upper,
         choices=DETECTORS,
         default=None,
-        help="Detector whose calibration to use. Only with --pe-per-mev-file.",
+        help="Detector whose calibration to use. Only with --pe-per-cm-file.",
     )
 
     parser.add_argument(
@@ -120,7 +123,7 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="START-END",
         help=(
             "Run range whose calibration to use, e.g. 10061-11918 or a "
-            "single run. Only with --pe-per-mev-file."
+            "single run. Only with --pe-per-cm-file."
         ),
     )
 
@@ -165,17 +168,21 @@ def print_configuration(arguments: argparse.Namespace) -> None:
     print(f"Input          = {arguments.input_file}")
     print(f"Output dir     = {arguments.output_dir}")
     print(f"Output prefix  = {arguments.output_prefix}")
-    setup = arguments.digitization
+    setup = arguments.digitization 
+    provenance = setup.provenance
 
-    if setup.per_station:
-        print(f"PE per MeV     = per station, from {setup.provenance['pe_per_mev_file']}")
-        print(f"Detector       = {setup.provenance['detector']}")
-        print(f"Run range      = {setup.provenance['run_range']}")
+    if provenance["digitization_method"] == "npe_per_cm":
+        print("Method         = path length x NPE/cm(Landau)")
+        print(f"PE per cm file = {provenance['pe_per_cm_file']}")
+        print(f"Detector       = {provenance['detector']}")
+        print(f"Run range      = {provenance['run_range']}")
 
         for station, factor in sorted(setup.factors.items()):
-            print(f"  station {station:>3}  = {factor}")
+            print(f"  station {station:>3}  = {factor:.3f} PE/cm")
     else:
+        print("Method         = energy x Poisson")
         print(f"PE per MeV     = {setup.factors}")
+
     print(f"RNG seed       = {arguments.rng_seed}")
     print(f"Seeding        = {SEEDING_SCHEME}")
     print(f"Chunk size     = {arguments.chunk_size:,}")
@@ -191,12 +198,21 @@ def run_clusterization(arguments: argparse.Namespace) -> None:
         output_dir=str(arguments.output_dir),
         chunk_size=arguments.chunk_size,
     )
+    
+    setup = arguments.digitization
+    
+    if setup.provenance["digitization_method"] == "npe_per_cm":
+        digitizer = LandauPathDigitizer(
+            pe_per_cm=setup.factors,
+            rng_seed=arguments.rng_seed,
+        )
+    else:
+        digitizer = PoissonDigitizer(
+            pe_per_mev=setup.factors,
+            rng_seed=arguments.rng_seed,
+        )
 
-    digitizer = PoissonDigitizer(
-        pe_per_mev=arguments.digitization.factors,
-        rng_seed=arguments.rng_seed,
-    )
-
+        
     clusterizer = SimClusterizer(rng_seed=arguments.rng_seed)
 
     event_keys = reader.get_event_keys()
@@ -304,7 +320,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         arguments.digitization = digitization_setup(
             pe_per_mev=arguments.pe_per_mev,
-            pe_per_mev_file=arguments.pe_per_mev_file,
+            pe_per_cm_file=arguments.pe_per_cm_file,
             detector=arguments.detector,
             run_range=arguments.run_range,
             default_pe_per_mev=DEFAULT_PE_PER_MEV,

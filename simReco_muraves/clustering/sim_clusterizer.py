@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping
+
+
 import numpy as np
+from scipy.stats import landau
+
 from simReco_muraves.models.cluster_record import ClusterRecord
 
 # Adjust this import to wherever CreateClusterList actually lives
@@ -382,6 +386,59 @@ class PoissonDigitizer:
             self.digitize_bar(hit)
             for hit in bar_hits
         ]
+
+
+LANDAU_SIGMA = 2.0
+LANDAU_CLIP = (2.0, 7.0)
+LANDAU_SCIPY_SCALE = np.pi / 2
+LANDAU_SCIPY_SHIFT = np.log(np.pi / 2)
+
+
+
+_LANDAU_CDF_WINDOW = landau.cdf([
+    (-LANDAU_CLIP[0] - LANDAU_SCIPY_SHIFT) / LANDAU_SCIPY_SCALE,
+    (LANDAU_CLIP[1] - LANDAU_SCIPY_SHIFT) / LANDAU_SCIPY_SCALE,
+])
+
+
+def landau_factor(rng, mpv, sigma=LANDAU_SIGMA):
+    """One draw of ROOT's Landau(mpv, sigma), kept inside
+    [mpv - LANDAU_CLIP[0] * sigma, mpv + LANDAU_CLIP[1] * sigma]."""
+    u = rng.uniform(*_LANDAU_CDF_WINDOW)
+    x = LANDAU_SCIPY_SCALE * landau.ppf(u) + LANDAU_SCIPY_SHIFT
+    return mpv + sigma * float(x)
+
+
+class LandauPathDigitizer(PoissonDigitizer):
+    """
+    Path-length digitizer: observed_nPE = L(cm) * Landau(npe_per_cm),
+    with L the path length summed over the hits of the bar.
+    
+    """
+
+
+    def __init__(
+        self,
+        pe_per_cm,
+        rng_seed=None,
+    ):
+
+        self.pe_per_mev = pe_per_cm
+        self.rng_seed = rng_seed
+        self.rng = np.random.default_rng(rng_seed)
+
+    def digitize_bar(self, bar_hit, rng=None):
+
+        pe_per_cm = self.factor_for(bar_hit.station)
+        draw = landau_factor(self.rng if rng is None else rng, pe_per_cm)
+
+        return DigitizedBarHit(
+            bar_hit=bar_hit,
+            expected_npe=pe_per_cm * bar_hit.path_length_cm,
+            observed_npe=draw * bar_hit.path_length_cm,
+        )
+
+    
 def cluster_collection_to_records(
     event,
     station,
