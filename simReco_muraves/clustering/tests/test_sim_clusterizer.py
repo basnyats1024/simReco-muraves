@@ -13,6 +13,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+import numpy as np
+from scipy.stats import landau
 
 from simReco_muraves.clustering import sim_clusterizer as sc
 from simReco_muraves.clustering.ClusterLists import ClusterCollection
@@ -291,3 +293,57 @@ def test_unseeded_clusterizer_leaves_the_experiment_default(monkeypatch):
     )
 
     assert captured["smearing_rng"] is None
+
+# ----------------------------------------------------------------------
+# Landau path-length digitizer
+# ----------------------------------------------------------------------
+
+def path_bar(station=0, path_length=2.0):
+    return sc.BarHit(
+        process_id=1,
+        event=10,
+        station=station,
+        module=0,
+        bar=5,
+        strip=5,
+        energy_mev=1.0,
+        path_length_cm=path_length,
+        t_min_ns=2.0,
+        t_max_ns=2.0,
+        multiplicity=1,
+    )
+
+def test_landau_draws_stay_inside_the_clip_window():
+    rng = np.random.default_rng(1)
+    draws = [sc.landau_factor(rng, 10.0) for i in range(10_000)]
+
+    low = 10.0 - sc.LANDAU_CLIP[0] * sc.LANDAU_SIGMA    # 6
+    high = 10.0 + sc.LANDAU_CLIP[1] * sc.LANDAU_SIGMA   # 24
+    assert low <= min(draws)
+    assert max(draws) <= high
+
+
+def test_landau_conversion_matches_root_median():
+    median = sc.LANDAU_SCIPY_SCALE * landau.ppf(0.5) + sc.LANDAU_SCIPY_SHIFT
+
+    assert median == pytest.approx(1.3557804, abs=1e-4)
+
+
+def test_landau_light_is_path_times_draw():
+    digitizer = sc.LandauPathDigitizer(pe_per_cm={0: 10.0}, rng_seed=42)
+    result = digitizer.digitize_bar(path_bar(path_length=2.0))
+
+    assert result.expected_npe == pytest.approx(2.0 * 10.0)
+    assert 2.0 * 6.0 <= result.observed_npe <= 2.0 * 24.0
+
+
+def test_landau_each_station_uses_its_own_factor():
+    digitizer = sc.LandauPathDigitizer(pe_per_cm={0: 10.0, 1: 100.0}, rng_seed=42)
+    
+    low = digitizer.digitize_bar(path_bar(station=0, path_length=1.0))
+    high = digitizer.digitize_bar(path_bar(station=1, path_length=1.0))
+
+    assert 6.0 <= low.observed_npe <= 24.0
+    assert 96.0 <= high.observed_npe <= 114.0
+
+
