@@ -11,7 +11,7 @@ Simulated HitData
     ->
 Bar-level aggregation
     ->
-Poisson digitization
+Digitization (energy or pathlength)
     ->
 Plane construction
     ->
@@ -62,7 +62,7 @@ Responsibilities:
 
 - Geant4 hit aggregation
 - Strip mapping
-- Poisson detector-response digitization
+- Detector-response digitization: energy x Poisson, or path length x Landau NPE/cm
 - Plane construction
 - Official MURAVES clusterization
 - ClusterRecord generation
@@ -118,6 +118,9 @@ pip install -e .
 An editable install puts `simReco_muraves` on the import path and
 registers the command-line entry points. Without it, the modules must
 be run from the repository root with `PYTHONPATH=.` set.
+
+The dependencies are uproot, awkward, numpy and SciPy (>= 1.16,
+for the Landau draw of the path-length digitizer).
 
 To run the test suite as well, install the development extra:
 
@@ -193,8 +196,13 @@ temporary directory.
 
 ### Digitization parameters
 
-The clusterization stage exposes the detector-response constants that
-set the simulated energy scale:
+Clusterization offers two digitization methods. The options choose
+between them, and the choice is recorded in provenance as
+`digitization_method`.
+
+**Energy method** (`energy`, the default). Each bar's deposited energy
+is converted with one factor for every plane, and the npe is drawn
+from a Poisson distribution:
 
 ```bash
 muraves-simCluster <hit_root_file> --pe-per-mev 8.5 --rng-seed 42
@@ -203,29 +211,44 @@ muraves-simCluster <hit_root_file> --pe-per-mev 8.5 --rng-seed 42
 The default conversion factor is the one used for the Phase I-III
 validation samples.
 
-Per-plane factors can be read from a file instead:
+**Path-length method** (`npe_per_cm`). Each bar's Geant4 path length L,
+in cm, is multiplied by one Landau draw per bar, using per-plane NPE/cm
+from the good-run calibration file:
 
 ```bash
 muraves-simCluster <hit_root_file> \
-    --pe-per-mev-file factors.json --detector ROSSO --run-range 10061-11918
+    --pe-per-cm-file calibration/npecm_per_run_v1.json \
+    --detector ROSSO --run-range 10061-11918 --rng-seed 42
 ```
+The option was previously called `--pe-per-mev-file`; it is now
+`--pe-per-cm-file`, since the file holds NPE per cm rather than per MeV.
 
-A file always wins over `--pe-per-mev`, and giving both prints a
-warning. `--detector` and `--run-range` are required with a file and
-rejected without one, since on their own they would have no effect.
-The detector and run range are inserted into the output names
-(`<stem>_ROSSO_r10061-11918_clustered_partNNN.root`), and provenance
-records the file path, its SHA-256, the detector, the run range and
-the per-station factors actually used. A station missing from the
-factors is an error, never a silent default.
+- observed nPE = L x Landau(mpv = NPE/cm of the plane, sigma = 2 NPE/cm),
+  truncated to [mpv - 2 sigma, mpv + 7 sigma], with no Poisson on top.
+  mpv is ROOT's Landau location parameter; the draw reproduces ROOT's
+  `TRandom::Landau`.
+- Each plane's NPE/cm is the mean over the selected good runs. Values
+  that are null or outside [5, 15] NPE/cm are left out.
+- `--detector` is required. `--run-range` is optional; without it, the
+  detector's fallback setting is used, with a warning (NERO and BLU
+  `wp25_a`, ROSSO `wp25_b`). A range spanning more than one setting
+  also gives a warning.
+- `--pe-per-mev` and `--pe-per-cm-file` cannot be combined, and
+  `--detector` and `--run-range` are rejected without a file.
 
-Reading the file is not implemented yet. `resolve_conversion_factors()`
-in `simReco_muraves/clustering/conversion_factors.py` is a stub whose
-docstring describes what it must return; until it is filled in,
-`--pe-per-mev-file` stops immediately with a message saying so.
+With a file, the detector and run range (or the fallback setting) are
+inserted into the output names, e.g.
+`<stem>_ROSSO_r10061-11918_clustered_partNNN.root` or
+`<stem>_ROSSO_rwp25_b_clustered_partNNN.root`.
+
+Provenance records the file path and its SHA-256, the detector, the
+run range, the per-station NPE/cm actually used, and a calibration
+summary: the good runs selected, the settings in the range, and per
+plane how many runs were used, null or rejected. A station missing
+from the factors is an error, never a silent default.
 
 `--rng-seed` is a master seed. It drives both random processes in
-clusterization, Poisson digitization and the experiment's random
+clusterization, Digitization and the experiment's random
 smearing of single-strip cluster positions, through seeds derived per
 plane and per event (`simReco_muraves/clustering/seeding.py`). The
 same input, seed and code therefore give identical output; the result

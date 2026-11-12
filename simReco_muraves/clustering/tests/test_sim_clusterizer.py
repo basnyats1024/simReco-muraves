@@ -339,11 +339,9 @@ def test_landau_light_is_path_times_draw():
 
 def test_landau_each_station_uses_its_own_factor():
     digitizer = sc.LandauPathDigitizer(pe_per_cm={0: 10.0, 1: 100.0}, rng_seed=42)
-    
+
     low = digitizer.digitize_bar(path_bar(station=0, path_length=1.0))
     high = digitizer.digitize_bar(path_bar(station=1, path_length=1.0))
 
     assert 6.0 <= low.observed_npe <= 24.0
     assert 96.0 <= high.observed_npe <= 114.0
-
-

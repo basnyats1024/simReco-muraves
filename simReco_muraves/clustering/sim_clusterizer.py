@@ -222,7 +222,7 @@ def aggregate_bar_hits(raw_hits):
 
     Pathlength:
         L_bar = sum(pathlength) in cm
-    
+
     Timing:
         t_min = min(hit times)
         t_max = max(hit times)
@@ -388,8 +388,10 @@ class PoissonDigitizer:
         ]
 
 
-LANDAU_SIGMA = 2.0
-LANDAU_CLIP = (2.0, 7.0)
+LANDAU_SIGMA = 2.0 # Landau width of the NPE/cm draw, in NPE/cm.
+LANDAU_CLIP = (2.0, 7.0) # Draw kept inside (mpv - 2 sigma, mpv + 7 sigma.
+
+# SciPy standard Landau -> ROOT: x_ROOT = SCALE * x_SciPy + SHIFT.
 LANDAU_SCIPY_SCALE = np.pi / 2
 LANDAU_SCIPY_SHIFT = np.log(np.pi / 2)
 
@@ -411,9 +413,25 @@ def landau_factor(rng, mpv, sigma=LANDAU_SIGMA):
 
 class LandauPathDigitizer(PoissonDigitizer):
     """
-    Path-length digitizer: observed_nPE = L(cm) * Landau(npe_per_cm),
-    with L the path length summed over the hits of the bar.
-    
+    Path-length digitizer: converts a particle's path length in a bar to nPE.
+
+    For each bar:
+
+        L            = path length summed over the bar's Geant4 hits, in cm
+        observed_nPE = L * Landau(mpv=npe_per_cm[station], LANDAU_SIGMA)
+        expected_nPE = L * npe_per_cm[station]
+
+    Landau draw:
+        - mpv is ROOT's Landau parameter.
+        - LANDAU_SIGMA = 2 NPE/cm.
+        - Limited to [mpv - 2 sigma, mpv + 7 sigma] (LANDAU_CLIP).
+        - One draw per bar, with no Poisson smearing on top, so
+          observed_nPE is not an integer.
+
+    SciPy to ROOT:
+        The draw follows ROOT's Landau(mpv, sigma). SciPy's standard Landau
+        is converted to ROOT's with x_ROOT = (pi/2) * x_SciPy + ln(pi/2).
+
     """
 
 
@@ -423,9 +441,7 @@ class LandauPathDigitizer(PoissonDigitizer):
         rng_seed=None,
     ):
 
-        self.pe_per_mev = pe_per_cm
-        self.rng_seed = rng_seed
-        self.rng = np.random.default_rng(rng_seed)
+        super().__init__(pe_per_mev=pe_per_cm, rng_seed=rng_seed)
 
     def digitize_bar(self, bar_hit, rng=None):
 
@@ -438,7 +454,7 @@ class LandauPathDigitizer(PoissonDigitizer):
             observed_npe=draw * bar_hit.path_length_cm,
         )
 
-    
+
 def cluster_collection_to_records(
     event,
     station,

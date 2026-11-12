@@ -2,7 +2,7 @@
 
 """Conversion-factor options and the per-station digitizer.
 
-Covers the rules between --pe-per-mev, --pe-per-cok m-file, --detector
+Covers the rules between --pe-per-mev, --pe-per-cm-file, --detector
 and --run-range; validation of resolved factors; the digitizer's
 per-station path; and the property per-plane factor studies rely on:
 changing one station's factor leaves every other station's random
@@ -18,6 +18,7 @@ import pytest
 from simReco_muraves.clustering import conversion_factors as cf
 from simReco_muraves.clustering.sim_clusterizer import (
     BarHit,
+    LandauPathDigitizer,
     PoissonDigitizer,
 )
 
@@ -107,7 +108,7 @@ def write_npecm_file(tmp_path):
                 "Y1": 6.0, "Y2": 6.0, "Y3": 6.0, "Y4": 6.0,
                 "Z1": 6.0, "Z2": None, "Z3": 6.0, "Z4": 6.0,
             },
-            
+
         }
     }))
     return path
@@ -171,7 +172,7 @@ def test_resolver_rejects_a_detector_missing_from_the_file(tmp_path):
         cf.resolve_conversion_factors(
             write_npecm_file(tmp_path), "NERO", (1, 2)
         )
-        
+
 # ----------------------------------------------------------------------
 # Rules between the options
 # ----------------------------------------------------------------------
@@ -243,15 +244,6 @@ def test_detector_or_run_range_without_file_is_rejected(overrides):
     with pytest.raises(ValueError, match="can only be used together"):
         setup(**overrides)
 
-
-# @pytest.mark.parametrize(
-#     "missing, message",
-#     [
-#         ({"detector": None}, "--detector"),
-#         ({"run_range": None}, "--run-range"),
-#         ({"detector": None, "run_range": None}, "--detector and --run-range"),
-#     ],
-# )
 def test_file_requires_detector(factors_file):
     with pytest.raises(ValueError, match="requires --detector"):
         with_file(factors_file, detector=None)
@@ -289,13 +281,10 @@ def test_file_mode(factors_file):
     }
     assert len(result.provenance["pe_per_cm_file_sha256"]) == 64
 
-
-    
 def test_file_and_explicit_factor_is_an_error(factors_file):
     with pytest.raises(ValueError, match="two different digitization methods"):
         with_file(factors_file, pe_per_mev=4.0)
 
-        
 
 def test_resolved_factors_are_validated(factors_file, monkeypatch):
     monkeypatch.setattr(
@@ -308,14 +297,6 @@ def test_resolved_factors_are_validated(factors_file, monkeypatch):
 
     with pytest.raises(ValueError, match="positive and finite"):
         with_file(factors_file)
-
-
-# def test_stub_stops_file_mode_until_implemented(tmp_path):
-#     path = tmp_path / "factors.json"
-#     path.write_text("{}")
-
-#     with pytest.raises(NotImplementedError):
-#         setup(pe_per_cm_file=path, detector="ROSSO", run_range=(1, 2))
 
 def test_file_without_run_range_uses_the_fallback_setting(tmp_path):
     result = setup(pe_per_cm_file=write_npecm_file(tmp_path), detector="ROSSO")
@@ -428,6 +409,31 @@ def test_changing_one_station_factor_leaves_others_untouched():
     )
 
 
+def test_landau_same_seed_gives_identical_draws():
+    factors = {0: 10.0, 1: 10.0, 8: 10.0}
+
+    first = LandauPathDigitizer(pe_per_cm=factors, rng_seed=42).digitize(event_hits())
+    second = LandauPathDigitizer(pe_per_cm=factors, rng_seed=42).digitize(event_hits())
+
+    assert by_bar(first) == by_bar(second)
+
+
+def test_landau_changing_one_station_factor_leaves_others_untouched():
+    hits = event_hits()
+    base = {0: 10.0, 1: 10.0, 8: 10.0}
+    changed = dict(base)
+    changed[0] = 12.0
+
+    before = by_bar(LandauPathDigitizer(pe_per_cm=base, rng_seed=42).digitize(hits))
+    after = by_bar(LandauPathDigitizer(pe_per_cm=changed, rng_seed=42).digitize(hits))
+
+    for (station, strip), observed in before.items():
+        if station != 0:
+            assert after[(station, strip)] == observed
+        else:
+            assert after[(station, strip)] != observed
+
+
 # ----------------------------------------------------------------------
 # Command-line parsing
 # ----------------------------------------------------------------------
@@ -468,3 +474,15 @@ def test_cli_detector_is_case_insensitive():
 def test_cli_rejects_bad_values(extra):
     with pytest.raises(SystemExit):
         cli().parse_arguments(["hits.root", *extra])
+
+def test_file_option_gives_a_landau_digitizer(tmp_path):
+    result = setup(
+        pe_per_cm_file=write_npecm_file(tmp_path),
+        detector="ROSSO",
+        run_range=(1, 2),
+    )
+
+    digitizer = cli().make_digitizer(result, rng_seed=42)
+
+    assert type(digitizer) is LandauPathDigitizer
+    assert digitizer.factor_for(0) == 9.0

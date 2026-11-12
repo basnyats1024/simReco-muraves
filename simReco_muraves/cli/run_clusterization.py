@@ -102,9 +102,9 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "Path-length method: Read per-plane yields from a file. "
-            "Requires --detector. "
-            "--run-range is optional, without run-range detector's fallback "
-            "setting is used. "
+            "Requires --detector, --run-range is optional, without "
+            "run-range detector's fallback setting is used(NERO and "
+            "BLU wp25_a, ROSSO wp25_b)."
         ),
     )
 
@@ -168,7 +168,7 @@ def print_configuration(arguments: argparse.Namespace) -> None:
     print(f"Input          = {arguments.input_file}")
     print(f"Output dir     = {arguments.output_dir}")
     print(f"Output prefix  = {arguments.output_prefix}")
-    setup = arguments.digitization 
+    setup = arguments.digitization
     provenance = setup.provenance
 
     if provenance["digitization_method"] == "npe_per_cm":
@@ -189,6 +189,12 @@ def print_configuration(arguments: argparse.Namespace) -> None:
     print("==================================================")
     print()
 
+def make_digitizer(setup, rng_seed):
+    if setup.provenance["digitization_method"] == "npe_per_cm":
+        return LandauPathDigitizer(pe_per_cm=setup.factors, rng_seed=rng_seed)
+    else:
+        return PoissonDigitizer(pe_per_mev=setup.factors, rng_seed=rng_seed)
+
 
 def run_clusterization(arguments: argparse.Namespace) -> None:
     reader = RootReader(str(arguments.input_file))
@@ -198,21 +204,8 @@ def run_clusterization(arguments: argparse.Namespace) -> None:
         output_dir=str(arguments.output_dir),
         chunk_size=arguments.chunk_size,
     )
-    
-    setup = arguments.digitization
-    
-    if setup.provenance["digitization_method"] == "npe_per_cm":
-        digitizer = LandauPathDigitizer(
-            pe_per_cm=setup.factors,
-            rng_seed=arguments.rng_seed,
-        )
-    else:
-        digitizer = PoissonDigitizer(
-            pe_per_mev=setup.factors,
-            rng_seed=arguments.rng_seed,
-        )
 
-        
+    digitizer = make_digitizer(arguments.digitization, arguments.rng_seed)
     clusterizer = SimClusterizer(rng_seed=arguments.rng_seed)
 
     event_keys = reader.get_event_keys()

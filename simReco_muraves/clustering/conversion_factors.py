@@ -1,31 +1,27 @@
 # simReco_muraves/clustering/conversion_factors.py
 
-"""Conversion factors (nPE per MeV) for the digitizer.
+"""Conversion factors for the digitizer.
 
-The digitizer takes either one factor for every plane, or a mapping
-from station ID to factor. This module turns the command-line options
-into one or the other, enforces the rules between the options, and
-checks the result.
+Two methods are supported. The energy method uses one nPE-per-MeV
+factor for every plane. The path-length method reads per-plane NPE/cm
+from the good-run calibration file (resolve_conversion_factors) and
+maps it to station IDs.
 
-The one piece still missing is resolve_conversion_factors(): what the
-factors file looks like, and how a detector and run range select a
-calibration from it, is still being designed. It is a stub. Everything
-around it -- the flags and their rules, the digitizer, provenance and
-output naming -- is in place, so implementing that single function is
-all that is needed to enable --pe-per-mev-file.
+This module turns the command-line options into one or the other,
+enforces the rules between the options, and checks the result.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import operator
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-import json
-from collections import Counter
 
 from simReco_muraves.tracking.event_builder_adapter import STATION_MAP
 
@@ -134,11 +130,44 @@ def resolve_conversion_factors(
     detector: str,
     run_range: RunRange | None,
 ) -> tuple[dict[int, float], dict[str, Any], tuple[str, ...]]:
-    """NPE/cm per station for one detector, from the good-run file"""
+
+    """NPE/cm per station for one detector: the mean over the selected good runs.
+
+    The JSON file, keyed by detector and then by run number. Each run
+    gives its setting ("set") and one NPE/cm value per plane, Y1..Z4.
+    Only good runs are listed, so gaps in the run numbers are normal.
+
+    With run_range, every good run with start <= run <= end is selected.
+    Without it, every good run of the detector's FALLBACK_SETTING is
+    selected (NERO and BLU wp25_a, ROSSO wp25_b).
+
+    For each plane, the NPE/cm is the mean of the selected runs' values.
+    Values that are null, or outside NPECM_VALID ([5, 15] are left out
+    of the mean.
+
+    Returns the per-station factors, a summary and any warnings. The
+    factors map each station ID to its mean NPE/cm, for all eight
+    planes.
+
+    The summary records what was used, for the provenance: the
+    run range (or the fallback setting), the number of good runs
+    selected, the mean NPE/cm per plane, and per plane how many runs
+    were used, null or rejected, along with the settings in the range
+    and whether there was more than one seting.
+
+    The warnings say when the fallback setting was used, and when
+    the selected runs span more than one setting, in which case the
+    runs are still averaged together.
+
+    Raises ValueError if the file cannot be read, the detector is not in
+    it, no good run matches the selection, or a plane has no valid value
+    left.
+    """
+
     try:
         with open(path) as json_file:
             data = json.load(json_file)
-            
+
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError(f"cannot read the file {path}: {error}") from None
 
@@ -205,8 +234,8 @@ def resolve_conversion_factors(
         "multi_setting": len(settings) > 1,
     }
     return factors, summary, tuple(warnings)
-            
-  
+
+
 # ----------------------------------------------------------------------
 # Validation
 # ----------------------------------------------------------------------
@@ -216,7 +245,7 @@ def validate_conversion_factors(factors: Any) -> dict[int, float]:
     if not isinstance(factors, Mapping) or not factors:
         raise ValueError(
             "conversion factors must be a non-empty mapping of "
-            "station ID to nPE per MeV"
+            "station ID to conversion factor"
         )
 
     validated: dict[int, float] = {}
@@ -303,7 +332,7 @@ class DigitizationSetup:
     def per_station(self) -> bool:
         return isinstance(self.factors, dict)
 
-    
+
 def digitization_setup(
     *,
     pe_per_mev: float | None,
@@ -312,13 +341,20 @@ def digitization_setup(
     run_range: RunRange | None,
     default_pe_per_mev: float,
 ) -> DigitizationSetup:
-    """Apply the rules between the conversion-factor options.
+    """
+    Apply the rules between the options and pick the digitization method.
 
-    - Without a file: --pe-per-mev if given, else the default.
-      --detector and --run-range are rejected, since they would have no
-      effect and could suggest a detector was simulated when it was not.
-    - With a file: --detector and --run-range are both required, and the
-      file wins over --pe-per-mev, with a warning if both were given.
+    Without --pe-per-cm-file, the energy method is used: one nPE per MeV
+    for every plane, from --pe-per-mev, if given, else the default.
+    --detector and --run-range are rejected.
+
+    With --pe-per-cm-file, the path-length method is used: per-station
+    NPE/cm from the good-run file.
+    --detector is required. --run-range is optional; without it, the
+    detector's fallback setting is used, with a warning. Giving
+    --pe-per-mev as well is an error, since the two options select
+    different methods.
+
     """
     if pe_per_cm_file is None:
         stray = [
@@ -336,7 +372,7 @@ def digitization_setup(
                 "--pe-per-cm-file; without a file it would have no "
                 "effect"
             )
- 
+
         factor = _validate_single_factor(
             default_pe_per_mev if pe_per_mev is None else pe_per_mev
         )
@@ -375,7 +411,7 @@ def digitization_setup(
     if not path.is_file():
         raise ValueError(f"conversion-factor file not found: {path}")
 
- 
+
 
     factors, summary, warnings = resolve_conversion_factors(
         path, detector, run_range
