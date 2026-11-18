@@ -12,13 +12,16 @@
 # Each stage is invoked once per file with an explicit -o, so outputs
 # never collide and golden files always come from the tracked route.
 #
+# Options after -- are passed to muraves-simCluster, so the
+# digitization method and seed can be chosen per run.
+#
 # Written for the bash 3.2 that ships with macOS.
 
 set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: run_chain.sh -o OUTDIR [-i INPUT] [options]
+Usage: run_chain.sh -o OUTDIR [-i INPUT] [options] [-- CLUSTER_OPTIONS]
 
   -i INPUT   Geant4 HitData ROOT file, or a directory of them.
              Required for the cluster stage.
@@ -33,6 +36,13 @@ Usage: run_chain.sh -o OUTDIR [-i INPUT] [options]
              run can survive into the next stage.
   -h         Show this help.
 
+  -- CLUSTER_OPTIONS
+             Everything after -- is passed to muraves-simCluster, e.g.
+             the digitization method, calibration and seed. Without
+             it, muraves-simCluster's defaults apply. Its output
+             options (-o, --output-dir, --output-prefix) are set by
+             this script and cannot be passed.
+
 Without -f, the track and golden stages skip files whose output
 already exists, so an interrupted run can be resumed by re-running the
 same command. If a run was killed while a file was being written,
@@ -41,6 +51,9 @@ delete that one output before resuming.
 Examples:
   run_chain.sh -i /data/sim/hits_full.root -o /data/sim/chain_v2 -j 4 -c
   run_chain.sh -o /data/sim/chain_v2 -s golden -j 4
+  run_chain.sh -i /data/sim/hits_full.root -o /data/sim/chain_npecm -j 4 \
+      -- --pe-per-cm-file calibration/npecm_per_run_v1.json \
+         --detector NERO --run-range 5710-5759
 EOF
 }
 
@@ -86,6 +99,37 @@ case "$STAGE" in
     track)   RUN_TRACK=1 ;;
     golden)  RUN_GOLDEN=1 ;;
 esac
+
+# Options for muraves-simCluster. getopts consumes the --, so it is the
+# argument just before OPTIND. Anything left over without a -- is a
+# mistake, not a clustering option, and is refused.
+CLUSTER_ARGS=()
+N_CLUSTER_ARGS=0
+
+if [[ "$OPTIND" -gt 1 && "${@:OPTIND-1:1}" == "--" ]]; then
+    shift $((OPTIND - 1))
+    N_CLUSTER_ARGS=$#
+    if [[ "$N_CLUSTER_ARGS" -gt 0 ]]; then
+        CLUSTER_ARGS=("$@")
+    fi
+else
+    shift $((OPTIND - 1))
+    if [[ $# -gt 0 ]]; then
+        usage
+        die "unexpected argument '$1'; options for muraves-simCluster go after --"
+    fi
+fi
+
+for cluster_arg in ${CLUSTER_ARGS[@]+"${CLUSTER_ARGS[@]}"}; do
+    case "$cluster_arg" in
+        -o*|--o*)
+            die "'$cluster_arg' after --: this script sets the cluster output itself" ;;
+    esac
+done
+
+if [[ "$N_CLUSTER_ARGS" -gt 0 && "$RUN_CLUSTER" != 1 ]]; then
+    die "options after -- are for the cluster stage, which stage '$STAGE' does not run"
+fi
 
 if [[ "$RUN_CLUSTER" == 1 ]]; then
     [[ -n "$INPUT" ]] || die "-i INPUT is required for the cluster stage"
@@ -160,6 +204,14 @@ echo "host         : $(hostname)"
 echo "stage        : $STAGE"
 echo "jobs         : $JOBS"
 echo "input        : ${INPUT:-(not used)}"
+if [[ "$RUN_CLUSTER" == 1 ]]; then
+    if [[ "$N_CLUSTER_ARGS" -gt 0 ]]; then
+        # %q quotes each option, so the line can be pasted back as is.
+        echo "cluster opts : $(printf '%q ' "${CLUSTER_ARGS[@]}")"
+    else
+        echo "cluster opts : (muraves-simCluster defaults)"
+    fi
+fi
 echo "output       : $OUTDIR"
 echo "logs         : $LOGDIR"
 echo "python       : $PYTHON"
@@ -293,6 +345,7 @@ if [[ "$RUN_CLUSTER" == 1 ]]; then
         say "clustering $raw_name"
 
         if ! muraves-simCluster "$raw_file" -o "$CLUSTER_DIR" \
+                ${CLUSTER_ARGS[@]+"${CLUSTER_ARGS[@]}"} \
                 2>&1 | tee "$LOGDIR/cluster/$raw_name.log"; then
             echo "cluster $raw_file" >> "$FAILFILE"
             say "FAILED clustering $raw_name"
