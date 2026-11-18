@@ -17,10 +17,10 @@
     },
     "ROSSO": {
       "kind": "data",
-      "label": "ROSSO 3780-3818",
+      "label": "ROSSO 10503-10551",
       "reco_version": "v1-rc1",
-      "analyzed": "/path/to/expData/MURAVES_AnalyzedData_ROSSO_run3780-3818_v1.root",
-      "golden": "/path/to/expData/golden_v1rc1/MURAVES_AnalyzedData_ROSSO_run3780-3818_v1_golden.root"
+      "analyzed": "/path/to/expData/MURAVES_AnalyzedData_ROSSO_run10503-10551_v1.root",
+      "golden": "/path/to/expData/golden_v1rc1/MURAVES_AnalyzedData_ROSSO_run10503-10551_v1_golden.root"
     },
     "BLU": {
       "kind": "data",
